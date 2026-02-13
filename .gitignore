@@ -1,0 +1,139 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# C extensions
+*.c
+*.o
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+sparta-venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Project-specific: Model weights (large files)
+Trained_Models/CHAD/*.pth.tar
+Trained_Models/SHT/*.pth.tar
+Trained_Models/NWPUC/*.pth.tar
+*.pth
+*.pt
+*.pth.tar
+
+# Project-specific: Video files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
+
+# Project-specific: Output files
+output*.mp4
+out*.mp4
+result*.mp4
+anomaly*.png
+anomaly*.jpg
+anomaly*.pdf
+test_video*.mp4
+
+# Project-specific: YOLO models (pre-downloaded)
+yolo11n-pose.pt
+yolo11s-pose.pt
+yolo11m-pose.pt
+yolo11l-pose.pt
+yolo11x-pose.pt
+yolo26x-pose.pt
+yolo26x.pt
+
+# Project-specific: Large datasets
+data/
+datasets/
+*.zip
+*.tar.gz
+
+# Mac specific
+.AppleDouble
+.LSOverride
+
+# Windows specific
+$RECYCLE.BIN/
+
+# Linux specific
+.directory
+
+# Misc
+*.log
+*.bak
+*.swp
+.~*
+
+# Tensorflow/PyTorch specific
+runs/
+logs/
+*.onnx

@@ -1,0 +1,18 @@
+# Core Machine Learning
+torch
+torchvision
+numpy
+scipy
+scikit-learn
+pandas
+
+# Vision and Models
+ultralytics
+openmim
+
+# Utilities
+pyyaml
+tqdm
+opencv-python
+filterpy
+lapx
