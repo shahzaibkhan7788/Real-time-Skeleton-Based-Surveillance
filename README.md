@@ -1,4 +1,4 @@
-# SPARTA: Human-Centric Video Anomaly Detection
+# Human-Centric Video Anomaly Detection
 
 This repository contains an updated SPARTA pipeline for pose-based anomaly detection on surveillance videos.
 
