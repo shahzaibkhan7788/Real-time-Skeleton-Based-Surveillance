@@ -1,6 +1,6 @@
 # Human-Centric Video Anomaly Detection
 
-This repository contains an updated SPARTA pipeline for pose-based anomaly detection on surveillance videos.
+This repository contains an updated SPARTA pipeline for pose-based anomaly detection on surveillance videos. It builds on the original SPARTA architecture from [TeCSAR-UNCC/SPARTA](https://github.com/TeCSAR-UNCC/SPARTA), which trains the shared encoder plus the twin decoders (CTD/FTD) on multiple datasets; this fork focuses on streamlined multi-person inference and tooling.
 
 It includes:
 - The SPARTA model code (`models.py`, `main.py`, `utils/`)
@@ -204,6 +204,30 @@ python inference_with_graph.py \
 Outputs:
 - annotated video
 - graph image (frame index vs anomaly score)
+
+## 11) Demo: Sample Output
+
+A sample inference output is shown below (CHAD weights, YOLOv26 pose detector):
+
+**Video Details:**
+- Source: Surveillance footage (3+ people)
+- Duration: ~25 seconds
+- Features:
+  - Multi-person skeleton tracking (green = normal, red = anomalous)
+  - Person ID labels
+  - Real-time anomaly detection from pose sequences
+  
+**To generate your own demo:**
+```bash
+python inference_sparta_vit.py \
+  --video_path "your_video.mp4" \
+  --ctd_path "Trained_Models/CHAD/CTD.pth.tar" \
+  --ftd_path "Trained_Models/CHAD/FTD.pth.tar" \
+  --score_mode both --anomaly_threshold 0.20 \
+  --device cuda --save_output "out.mp4"
+```
+
+Download or view a pre-generated demo at [out.mp4](out.mp4) (click the file in the repo and select "Download").
 
 ## 12) Legacy Pose Pipeline Scripts
 
