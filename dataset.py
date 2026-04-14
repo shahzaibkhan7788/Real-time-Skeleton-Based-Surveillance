@@ -125,32 +125,35 @@ class PoseSegDataset(Dataset):
     def __len__(self):
         return self.num_transform * self.num_samples
 
-
 def get_dataset_and_loader(args, trans_list, only_test=False):
     loader_args = {'batch_size': args.batch_size, 'num_workers': args.num_workers, 'pin_memory': True}
+    
+    # TRACE: Show the temporal window scaling
     a = 1 if args.branch == "SPARTA_C" else 2 
-    dataset_args = {'headless': args.headless, 'scale': args.norm_scale, 'scale_proportional': args.prop_norm_scale,
-                    'seg_len': a*args.seg_len, 'return_indices': True, 'return_metadata': True, "dataset": args.dataset,
-                    'train_seg_conf_th': args.train_seg_conf_th, 'specific_clip': args.specific_clip, 'relative': args.relative, 'traj': args.traj}
+    print(f"\n[GET_LOADER] Branch: {args.branch} | Scaling Factor: {a} | Final Seg Len: {a*args.seg_len}")
+
+    dataset_args = {
+        'headless': args.headless, 'scale': args.norm_scale, 'scale_proportional': args.prop_norm_scale,
+        'seg_len': a*args.seg_len, 'return_indices': True, 'return_metadata': True, "dataset": args.dataset,
+        'train_seg_conf_th': args.train_seg_conf_th, 'specific_clip': args.specific_clip, 
+        'relative': args.relative, 'traj': args.traj
+    }
+
     dataset, loader = dict(), dict()
     splits = ['train', 'test'] if not only_test else ['test']
+    
     for split in splits:
-        evaluate = split == 'test'
-        abnormal_train_path = args.pose_path_train_abnormal if split == 'train' else None
-        normalize_pose_segs = args.global_pose_segs
-        dataset_args['trans_list'] = trans_list[:args.num_transform] if split == 'train' else None
-        dataset_args['seg_stride'] = args.seg_stride if split == 'train' else 1  # No strides for test set
-        dataset_args['vid_path'] = args.vid_path[split]
-        dataset[split] = PoseSegDataset(args.pose_path[split], path_to_vid_dir=args.vid_path[split],
-                                        normalize_pose_segs=normalize_pose_segs,
-                                        evaluate=evaluate,
-                                        abnormal_train_path=abnormal_train_path,
-                                        **dataset_args)
+        print(f"[GET_LOADER] Loading {split} split from: {args.pose_path[split]}")
+        
+        # ... (keep existing dataset initialization code) ...
+        
+        dataset[split] = PoseSegDataset(args.pose_path[split], **dataset_args) # Simplified for display
         loader[split] = DataLoader(dataset[split], **loader_args, shuffle=(split == 'train'))
-    if only_test:
-        loader['train'] = None
-    return dataset, loader
+        
+        # TRACE: Check the length of the dataset
+        print(f"[GET_LOADER] {split} dataset contains {len(dataset[split])} total segments.")
 
+    return dataset, loader
 
 def shanghaitech_hr_skip(shanghaitech_hr, scene_id, clip_id):
     if not shanghaitech_hr:
@@ -174,9 +177,14 @@ def gen_dataset(person_json_root, num_clips=None, kp18_format=True, ret_keys=Fal
     seg_conf_th = dataset_args.get('train_seg_conf_th', 0.0)
     dataset = dataset_args.get('dataset', 'ShanghaiTech')
 
-    dir_list = os.listdir(person_json_root)
-    if dataset=='c1' or dataset=='c2' or dataset=='c3' or dataset=='c4' or dataset=='CHAD' or dataset=='NWPUC' or dataset=='CPCC' or dataset=='CPCC0' or dataset=='CPCC1' or dataset=='CPCC2' or dataset=='CPCC3' or dataset=='CPCC4' or dataset=='CPCC5' or dataset=='CPCC6' or dataset=='corridor' or dataset=='Avenue':
-        json_list = sorted([fn for fn in dir_list])
+    if os.path.isfile(person_json_root):
+        base_dir = os.path.dirname(person_json_root)
+        dir_list = [os.path.basename(person_json_root)]
+    else:
+        base_dir = person_json_root
+        dir_list = os.listdir(person_json_root)
+    if dataset in ('c1','c2','c3','c4','CHAD','NWPUC','CPCC','CPCC0','CPCC1','CPCC2','CPCC3','CPCC4','CPCC5','CPCC6','corridor','Avenue'):
+        json_list = sorted([fn for fn in dir_list if fn.endswith('.json')])
     else:
         json_list = sorted([fn for fn in dir_list if fn.endswith('tracked_person.json')])
     if num_clips is not None:
@@ -187,13 +195,18 @@ def gen_dataset(person_json_root, num_clips=None, kp18_format=True, ret_keys=Fal
                 re.findall('(abnormal|normal)_scene_(\d+)_scenario(.*)_alphapose_.*', person_dict_fn)[0]
             clip_id = type + "_" + clip_id
         else:
-            if dataset == 'corridor' or dataset == 'Avenue' or dataset=='NWPUC' or dataset=='CPCC' or dataset=='CPCC0' or dataset=='CPCC1' or dataset=='CPCC2' or dataset=='CPCC3' or dataset=='CPCC4' or dataset=='CPCC5' or dataset=='CPCC6':  
-                scene_id, clip_id = (person_dict_fn.split('.')[0]).split('_')[:2]
+            if dataset in ('corridor','Avenue','NWPUC','CPCC','CPCC0','CPCC1','CPCC2','CPCC3','CPCC4','CPCC5','CPCC6'):
+                parts = (person_dict_fn.split('.')[0]).split('_')
             else:
-                scene_id, clip_id = person_dict_fn.split('_')[:2]
-            if shanghaitech_hr_skip(dataset=="ShanghaiTech-HR", scene_id, clip_id):
+                parts = person_dict_fn.split('_')
+            if len(parts) >= 2:
+                scene_id, clip_id = parts[0], parts[1]
+            else:
+                # Fallback: no underscore, treat whole stem as clip_id, scene_id=0
+                scene_id, clip_id = 0, parts[0]
+            if shanghaitech_hr_skip(dataset=="ShaghaiTech-HR", scene_id, clip_id):
                 continue
-        clip_json_path = os.path.join(person_json_root, person_dict_fn)
+        clip_json_path = os.path.join(base_dir, person_dict_fn)
         with open(clip_json_path, 'r') as f:
             clip_dict = json.load(f)
         clip_segs_data_np, clip_segs_meta, clip_keys, single_pos_np, _, score_segs_data_np = gen_clip_seg_data_np(

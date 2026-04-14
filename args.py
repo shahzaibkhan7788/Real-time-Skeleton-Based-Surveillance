@@ -2,36 +2,55 @@ import os
 import pickle
 import time
 import argparse
+import yaml
 
 
 def init_args():
     parser = init_parser()
     args = parser.parse_args()
+    cfg = load_config(getattr(args, "config", None))
+    args = merge_config(args, cfg, parser)
     return init_sub_args(args)
-
 
 def init_sub_args(args):
     dataset = args.dataset
-    if args.vid_path_train and args.vid_path_test and args.pose_path_train and args.pose_path_test:
-        args.vid_path = {'train': args.vid_path_train,
-                         'test': args.vid_path_test}
+    
+    # 1. Handle Video Paths independently (allow providing only one)
+    args.vid_path = {
+        'train': args.vid_path_train if args.vid_path_train else os.path.join(args.data_dir, dataset, 'train/images/'),
+        'test':  args.vid_path_test  if args.vid_path_test  else os.path.join(args.data_dir, dataset, 'test/frames/')
+    }
 
-        args.pose_path = {'train': args.pose_path_train,
-                          'test': args.pose_path_test}
-    else:
-        args.vid_path = {'train': os.path.join(args.data_dir, dataset, 'train/images/'),
-                         'test':  os.path.join(args.data_dir, dataset, 'test/frames/')}
-
-        args.pose_path = {'train': os.path.join(args.data_dir, dataset, 'pose', 'train/'),
-                          'test':  os.path.join(args.data_dir, dataset, 'pose', 'test/')}
+    # 2. Handle Pose Paths independently (allow providing only one)
+    args.pose_path = {
+        'train': args.pose_path_train if args.pose_path_train else os.path.join(args.data_dir, dataset, 'pose', 'train/'),
+        'test':  args.pose_path_test  if args.pose_path_test  else os.path.join(args.data_dir, dataset, 'pose', 'test/')
+    }
     args.pose_path["train_abnormal"] = args.pose_path_train_abnormal
     args.ckpt_dir = None
+
+    # Branch-specific default save directory
+    if not args.model_save_dir:
+        branch_tag = args.branch.lower().replace("_", "-")
+        args.model_save_dir = f"./results-{branch_tag}"
+    elif args.model_save_dir in ['./results', 'results', 'results/']:
+        branch_tag = args.branch.lower().replace("_", "-")
+        args.model_save_dir = os.path.join(args.model_save_dir, f"results-{branch_tag}")
+
+    # Default save_results_dir per branch
+    if args.save_results and (not args.save_results_dir):
+        branch_tag = args.branch.lower().replace("_", "-")
+        args.save_results_dir = f"./evaluation_results_{branch_tag}"
+
     model_args = args_rm_prefix(args, 'model_')
     return args, model_args
 
 
 def init_parser(default_data_dir='data/', default_exp_dir='data/exp_dir'):
     parser = argparse.ArgumentParser(prog="STG-NF")
+    parser.add_argument('--config', type=str, default='config/default.yaml',
+                        help='Path to YAML config file (default: config/default.yaml)')
+    
     # General Args
     parser.add_argument('--vid_path_train', type=str, default=None, help='Path to training vids')
     parser.add_argument('--pose_path_train_abnormal', type=str, default=None, help='Path to training vids')
@@ -69,9 +88,9 @@ def init_parser(default_data_dir='data/', default_exp_dir='data/exp_dir'):
     parser.add_argument('--model_ckpt_dir', type=str, metavar='model', help="Path to a pretrained model")
     parser.add_argument('--model_ckpt_F', type=str, metavar='model', help="Path to a pretrained SPARTA_F")
     parser.add_argument('--model_ckpt_C', type=str, metavar='model', help="Path to a pretrained SPARTA_C")
-    parser.add_argument('--model_save_dir', type=str, default= './results', metavar='model', help="Path to a pretrained model")
+    parser.add_argument('--model_save_dir', type=str, default=None, metavar='model', help="Directory to save checkpoints and logs")
     parser.add_argument('--batch_size', type=int, default=256,  metavar='B', help='Batch size for train')
-    parser.add_argument('--epochs', '-model_e', type=int, default=8, metavar='E', help = 'Number of epochs per cycle')
+    parser.add_argument('--epochs', '-model_e', type=int, default=50, metavar='E', help = 'Number of epochs per cycle')
     parser.add_argument('--model_optimizer', '-model_o', type=str, default='adam', metavar='model_OPT', help = "Optimizer")
     parser.add_argument('--model_lr', type=float, default=5e-10, metavar='LR', help='Optimizer Learning Rate Parameter')
     parser.add_argument('--model_weight_decay', '-model_wd', type=float, default=5e-5, metavar='WD', help='Optimizer Weight Decay Parameter')
@@ -90,13 +109,60 @@ def init_parser(default_data_dir='data/', default_exp_dir='data/exp_dir'):
     parser.add_argument('--save_results_dir', type=str, help="Path for saving scores")
     parser.add_argument('--token_config', type=str, default='t', choices=['t', 'pst', 'kps', '2ds', 'st'], help='Token Configurations')
     parser.add_argument('--branch', type=str, default='SPARTA_C', choices=['SPARTA_C', 'SPARTA_F', 'SPARTA_H'], help='Choose a specific branch.')
+    parser.add_argument('--mode', type=str, default='train', choices=['train', 'test'], help='Workflow mode: train or test.')
+    parser.add_argument('--no_metrics', action='store_true', help='Skip metric computation (no masks).')
+    parser.add_argument('--eer_threshold_c', type=float, default=None, help='EER threshold for SPARTA_C')
+    parser.add_argument('--eer_threshold_f', type=float, default=None, help='EER threshold for SPARTA_F')
     
     parser.add_argument('--save', default='test1')
     parser.add_argument('--log_freq', default=200, type=int, help='num iterations per log')
     parser.add_argument('--dropout', type=float, default=0.3, metavar='DROPOUT', help='Dropout training Parameter (default: 0.3)')
 
+    # Training workflow controls
+    parser.add_argument('--disable_eval_during_train', action='store_true', help='Skip mid-epoch validation; final epoch is always evaluated')
+    parser.add_argument('--eval_interval', type=int, default=0, help='Evaluate every N epochs; 0 means only final epoch')
+    parser.add_argument('--skip_final_eval', action='store_true', help='--relativeSkip the final evaluation step after training')
+    parser.add_argument('--save_all_checkpoints', action='store_true', help='Save a checkpoint file at the end of every epoch')
+    parser.add_argument('--metrics_csv', type=str, default='metrics.csv', help='Filename (within model_save_dir) for per-epoch metrics log')
 
+    # default: do evaluate during training unless user opts out
+    parser.set_defaults(disable_eval_during_train=False)
     return parser
+
+
+def load_config(path):
+    if not path:
+        return {}
+    if not os.path.exists(path):
+        print(f"Config file '{path}' not found; using CLI/default values.")
+        return {}
+    with open(path, 'r') as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        print(f"Config file '{path}' is not a mapping; ignoring.")
+        return {}
+    return data
+
+
+def merge_config(args, cfg, parser):
+    """
+    Fill argparse Namespace with values from cfg only when the user
+    did not override them on the CLI (detected via parser defaults).
+    """
+    if not cfg:
+        return args
+    defaults = {a.dest: a.default for a in parser._actions if hasattr(a, 'dest')}
+    for key, val in cfg.items():
+        if val is None:
+            continue
+        if not hasattr(args, key):
+            continue
+        current = getattr(args, key)
+        default = defaults.get(key, None)
+        # If the current value equals the parser default, assume not overridden.
+        if current == default:
+            setattr(args, key, val)
+    return args
 
 
 def args_rm_prefix(args, prefix):

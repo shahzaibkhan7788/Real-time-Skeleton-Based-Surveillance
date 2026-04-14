@@ -228,6 +228,188 @@ class Trainer:
         else:
             self.scheduler = scheduler_f(self.optimizer)
 
+    def run_eval(self, args, writer, epoch_tag):
+        eval_loss = []
+        self.model.eval()
+        with torch.no_grad():
+            for i, data_batch in enumerate(tqdm(self.test_loader)):
+                data = data_batch[0].to(args.device, non_blocking=True)
+                data = data[:,0:2, :, :].to(torch.float32)
+                batch_size, channels, seg_lenx2, num_kp = data.shape
+                
+                seg_len = seg_lenx2//2
+                input_data = data[:, :, 0:int(seg_lenx2/2), :]
+                target_data = data[:, :,int(seg_lenx2/2): seg_lenx2, :]
+                
+                if args.token_config == "t": 
+                    input_data = input_data.permute(0, 2, 1, 3)
+                    input_data = input_data.reshape(batch_size, seg_len, channels*num_kp)
+                    
+                    target_data = target_data.permute(0, 2, 1, 3)
+                    target_data = target_data.reshape(batch_size, seg_len, channels*num_kp)
+                elif args.token_config == "pst": 
+                    input_data = input_data.reshape(batch_size, seg_len, channels*num_kp)
+                    
+                    target_data = target_data.reshape(batch_size, seg_len, channels*num_kp)
+                elif args.token_config == "kps":
+                    if num_kp == 36:
+                        absolute = input_data[:, :, :, 0:18]
+                        rel = input_data[:, :, :, 18:]
+                        input_data = torch.cat([absolute, rel], dim=1)
+                        input_data = input_data.view(batch_size, -1, 18)
+                        input_data = input_data.permute(0, 2, 1)
+                        
+                        absolute = target_data[:, :, :, 0:18]
+                        rel = target_data[:, :, :, 18:]
+                        target_data = torch.cat([absolute, rel], dim=1)
+                        target_data = target_data.view(batch_size, -1, 18)
+                        target_data = target_data.permute(0, 2, 1)
+                    elif num_kp == 38:
+                        absolute = input_data[:, :, :, 0:19]
+                        rel = input_data[:, :, :, 19:]
+                        input_data = torch.cat([absolute, rel], dim=1)
+                        input_data = input_data.view(batch_size, -1, 19)
+                        input_data = input_data.permute(0, 2, 1)
+                        
+                        absolute = target_data[:, :, :, 0:19]
+                        rel = target_data[:, :, :, 19:]
+                        target_data = torch.cat([absolute, rel], dim=1)
+                        target_data = target_data.view(batch_size, -1, 19)
+                        target_data = target_data.permute(0, 2, 1)
+                    else:
+                        input_data = input_data.view(batch_size, -1, num_kp)
+                        input_data = input_data.permute(0, 2, 1)
+                        
+                        target_data = target_data.view(batch_size, -1, num_kp)
+                        target_data = target_data.permute(0, 2, 1)
+                elif args.token_config == "2ds":
+                    if num_kp == 36:
+                        absolute = input_data[:, :, :, 0:18]
+                        rel = input_data[:, :, :, 18:]
+                        absolute = absolute.permute(0,2,1,3)
+                        absolute = absolute.reshape(batch_size,seg_len,-1)
+                        absolute = absolute.permute(0, 2, 1)
+                        rel = rel.permute(0,2,1,3)
+                        rel = rel.reshape(batch_size,seg_len,-1)
+                        rel = rel.permute(0, 2, 1)
+                        input_data = torch.cat([absolute, rel], dim=2)
+                        
+                        absolute = target_data[:, :, :, 0:18]
+                        rel = target_data[:, :, :, 18:]
+                        absolute = absolute.permute(0,2,1,3)
+                        absolute = absolute.reshape(batch_size,seg_len,-1)
+                        absolute = absolute.permute(0, 2, 1)
+                        rel = rel.permute(0,2,1,3)
+                        rel = rel.reshape(batch_size,seg_len,-1)
+                        rel = rel.permute(0, 2, 1)
+                        target_data = torch.cat([absolute, rel], dim=2)
+                    elif num_kp == 38:
+                        absolute = input_data[:, :, :, 0:19]
+                        rel = input_data[:, :, :, 19:]
+                        absolute = absolute.permute(0,2,1,3)
+                        absolute = absolute.reshape(batch_size,seg_len,-1)
+                        absolute = absolute.permute(0, 2, 1)
+                        rel = rel.permute(0,2,1,3)
+                        rel = rel.reshape(batch_size,seg_len,-1)
+                        rel = rel.permute(0, 2, 1)
+                        input_data = torch.cat([absolute, rel], dim=2)
+                        
+                        absolute = target_data[:, :, :, 0:19]
+                        rel = target_data[:, :, :, 19:]
+                        absolute = absolute.permute(0,2,1,3)
+                        absolute = absolute.reshape(batch_size,seg_len,-1)
+                        absolute = absolute.permute(0, 2, 1)
+                        rel = rel.permute(0,2,1,3)
+                        rel = rel.reshape(batch_size,seg_len,-1)
+                        rel = rel.permute(0, 2, 1)
+                        target_data = torch.cat([absolute, rel], dim=2)    
+                    else:
+                        input_data = input_data.permute(0,2,1,3)
+                        input_data = input_data.reshape(batch_size,seg_len,-1)
+                        input_data = input_data.permute(0, 2, 1)
+                        
+                        target_data = target_data.permute(0,2,1,3)
+                        target_data = target_data.reshape(batch_size,seg_len,-1)
+                        target_data = target_data.permute(0, 2, 1)
+                elif args.token_config == "st":
+                    if num_kp == 36:
+                        absolute = input_data[:, :, :, 0:18]
+                        rel = input_data[:, :, :, 18:]
+                        absolute = absolute.permute(0, 1, 3, 2)
+                        absolute = absolute.reshape(batch_size,channels,-1)
+                        absolute = absolute.permute(0, 2, 1)
+                        rel = rel.permute(0, 1, 3, 2)
+                        rel = rel.reshape(batch_size,channels,-1)
+                        rel = rel.permute(0, 2, 1)
+                        input_data = torch.cat([absolute, rel], dim=2)
+                        
+                        absolute = target_data[:, :, :, 0:18]
+                        rel = target_data[:, :, :, 18:]
+                        absolute = absolute.permute(0, 1, 3, 2)
+                        absolute = absolute.reshape(batch_size,channels,-1)
+                        absolute = absolute.permute(0, 2, 1)
+                        rel = rel.permute(0, 1, 3, 2)
+                        rel = rel.reshape(batch_size,channels,-1)
+                        rel = rel.permute(0, 2, 1)
+                        target_data = torch.cat([absolute, rel], dim=2)
+                    if num_kp == 38:
+                        absolute = input_data[:, :, :, 0:19]
+                        rel = input_data[:, :, :, 19:]
+                        absolute = absolute.permute(0, 1, 3, 2)
+                        absolute = absolute.reshape(batch_size,channels,-1)
+                        absolute = absolute.permute(0, 2, 1)
+                        rel = rel.permute(0, 1, 3, 2)
+                        rel = rel.reshape(batch_size,channels,-1)
+                        rel = rel.permute(0, 2, 1)
+                        input_data = torch.cat([absolute, rel], dim=2)
+                        
+                        absolute = target_data[:, :, :, 0:19]
+                        rel = target_data[:, :, :, 19:]
+                        absolute = absolute.permute(0, 1, 3, 2)
+                        absolute = absolute.reshape(batch_size,channels,-1)
+                        absolute = absolute.permute(0, 2, 1)
+                        rel = rel.permute(0, 1, 3, 2)
+                        rel = rel.reshape(batch_size,channels,-1)
+                        rel = rel.permute(0, 2, 1)
+                        target_data = torch.cat([absolute, rel], dim=2)    
+                    else:
+                        input_data = input_data.permute(0, 1, 3, 2)
+                        input_data = input_data.reshape(batch_size,channels,-1)
+                        input_data = input_data.permute(0, 2, 1)
+                        
+                        target_data = target_data.permute(0, 1, 3, 2)
+                        target_data = target_data.reshape(batch_size,channels,-1)
+                        target_data = target_data.permute(0, 2, 1)
+
+                pred = self.model.forward(input_data, target_data)
+                loss = self.loss.calculate(target_data, pred)
+                eval_loss.extend(loss.cpu().numpy())
+
+        auc_roc, auc_pr, eer, eer_th, fpr_at_target_fnr, threshold_at_target_fnr = score_dataset(np.array(eval_loss), self.test_loader.dataset.metadata, args=args)
+        eval_metrics = {
+            "auc_roc": auc_roc,
+            "auc_pr": auc_pr,
+            "eer": eer,
+            "eer_th": eer_th,
+            "fpr_at_target_fnr": fpr_at_target_fnr,
+            "threshold_at_target_fnr": threshold_at_target_fnr,
+            "eval_loss_mean": float(np.mean(eval_loss)) if len(eval_loss) else 0.0
+        }
+        writer.add_scalar('AUC ROC', auc_roc, epoch_tag)
+        writer.add_scalar('AUC PR', auc_pr, epoch_tag)
+        writer.add_scalar('EER', eer, epoch_tag)
+        writer.add_scalar('EER TH', eer_th, epoch_tag)
+        writer.add_scalar('10ER', fpr_at_target_fnr, epoch_tag)
+        writer.add_scalar('10ER TH', threshold_at_target_fnr, epoch_tag)
+        
+        print('AUC ROC: {}'.format(auc_roc))
+        print('AUC PR: {}'.format(auc_pr))
+        print('EER: {}'.format(eer))
+        print('EER TH: {}'.format(eer_th))
+        print('10ER: {}'.format(fpr_at_target_fnr))
+        print('10ER TH: {}'.format(threshold_at_target_fnr))
+        return eval_metrics
+
     def get_optimizer(self):
         if self.args.optimizer == 'adam':
             if self.args.lr:
@@ -264,13 +446,22 @@ class Trainer:
             os.makedirs(self.args.model_save_dir)
         
         current_time = datetime.now()
-        # path_join = os.path.join(self.args.ckpt_dir, filename)
-        # path_join = os.path.join(self.args.save_dir, filename + '_' +  current_time.strftime("%Y-%m-%d_%H-%M-%S")+".pth.tar")
-        path_join = os.path.join(self.args.model_save_dir, filename + '_' + str(epoch) + ".pth.tar")
+
+        # Naming: keep stable names for last/best, otherwise include epoch index
+        if filename.endswith(".pth.tar"):
+            path_join = os.path.join(self.args.model_save_dir, filename)
+        elif filename in ["checkpoint_last", "checkpoint_best"]:
+            path_join = os.path.join(self.args.model_save_dir, filename + ".pth.tar")
+        else:
+            path_join = os.path.join(self.args.model_save_dir, filename + f"_{epoch+1}.pth.tar")
+
         torch.save(state, path_join)
         if is_best:
-            # shutil.copy(path_join, os.path.join(self.args.ckpt_dir, 'checkpoint_best.pth.tar'))
-            shutil.copy(path_join, os.path.join(self.args.model_save_dir, 'checkpoint_best.pth.tar'))
+            dest = os.path.join(self.args.model_save_dir, 'checkpoint_best.pth.tar')
+            if os.path.abspath(dest) != os.path.abspath(path_join):
+                shutil.copy(path_join, dest)
+            path_join = dest
+        return path_join
     
     def load_checkpoint(self, filename):
         filename = self.args.ckpt_dir + filename
@@ -295,8 +486,18 @@ class Trainer:
         return checkpoint_state
     
     def train(self, num_epochs=None, log=True, checkpoint_filename=None, args=None):
-        best_roc = 0.5
+        best_roc = -float("inf")
+        best_epoch = None
         writer = SummaryWriter(args.model_save_dir)
+        metrics_path = os.path.join(args.model_save_dir, args.metrics_csv)
+        metrics_header = [
+            "epoch", "train_loss", "eval_loss_mean",
+            "auc_roc", "auc_pr", "eer", "eer_th",
+            "fpr_at_target_fnr", "threshold_at_target_fnr", "lr"
+        ]
+        if not os.path.exists(metrics_path):
+            with open(metrics_path, "w", newline="") as csvfile:
+                csv.writer(csvfile).writerow(metrics_header)
         # train_elbo = []
         time_str = time.strftime("%b%d_%H%M_")
         if checkpoint_filename is None:
@@ -308,6 +509,7 @@ class Trainer:
             start_epoch = 0
             
         self.model = self.model.to(args.device)
+        eval_interval = getattr(args, "eval_interval", 0)
         for epoch in range(start_epoch, num_epochs):
             running_loss = 0
             print("Started epoch {}".format(epoch))
@@ -479,197 +681,86 @@ class Trainer:
             new_lr = self.optimizer.param_groups[0]['lr']
             new_lr = self.adjust_lr(epoch, new_lr)
             print('lr: {0:.3e}'.format(new_lr))
-            
-            eval_loss = []
-            self.model.eval()
-            with torch.no_grad():
-                for i, data_batch in enumerate(tqdm(self.test_loader)):
-                    data = data_batch[0].to(args.device, non_blocking=True)
-                    data = data[:,0:2, :, :].to(torch.float32)
-                    batch_size, channels, seg_lenx2, num_kp = data.shape
-                    
-                    seg_len = seg_lenx2//2
-                    input_data = data[:, :, 0:int(seg_lenx2/2), :]
-                    target_data = data[:, :,int(seg_lenx2/2): seg_lenx2, :]
-                    
-                    if args.token_config == "t": 
-                        input_data = input_data.permute(0, 2, 1, 3)
-                        input_data = input_data.reshape(batch_size, seg_len, channels*num_kp)
-                        
-                        target_data = target_data.permute(0, 2, 1, 3)
-                        target_data = target_data.reshape(batch_size, seg_len, channels*num_kp)
-                    elif args.token_config == "pst": 
-                        input_data = input_data.reshape(batch_size, seg_len, channels*num_kp)
-                        
-                        target_data = target_data.reshape(batch_size, seg_len, channels*num_kp)
-                    elif args.token_config == "kps":
-                        if num_kp == 36:
-                            absolute = input_data[:, :, :, 0:18]
-                            rel = input_data[:, :, :, 18:]
-                            input_data = torch.cat([absolute, rel], dim=1)
-                            input_data = input_data.view(batch_size, -1, 18)
-                            input_data = input_data.permute(0, 2, 1)
-                            
-                            absolute = target_data[:, :, :, 0:18]
-                            rel = target_data[:, :, :, 18:]
-                            target_data = torch.cat([absolute, rel], dim=1)
-                            target_data = target_data.view(batch_size, -1, 18)
-                            target_data = target_data.permute(0, 2, 1)
-                        elif num_kp == 38:
-                            absolute = input_data[:, :, :, 0:19]
-                            rel = input_data[:, :, :, 19:]
-                            input_data = torch.cat([absolute, rel], dim=1)
-                            input_data = input_data.view(batch_size, -1, 19)
-                            input_data = input_data.permute(0, 2, 1)
-                            
-                            absolute = target_data[:, :, :, 0:19]
-                            rel = target_data[:, :, :, 19:]
-                            target_data = torch.cat([absolute, rel], dim=1)
-                            target_data = target_data.view(batch_size, -1, 19)
-                            target_data = target_data.permute(0, 2, 1)
-                        else:
-                            input_data = input_data.view(batch_size, -1, num_kp)
-                            input_data = input_data.permute(0, 2, 1)
-                            
-                            target_data = target_data.view(batch_size, -1, num_kp)
-                            target_data = target_data.permute(0, 2, 1)
-                    elif args.token_config == "2ds":
-                        if num_kp == 36:
-                            absolute = input_data[:, :, :, 0:18]
-                            rel = input_data[:, :, :, 18:]
-                            absolute = absolute.permute(0,2,1,3)
-                            absolute = absolute.reshape(batch_size,seg_len,-1)
-                            absolute = absolute.permute(0, 2, 1)
-                            rel = rel.permute(0,2,1,3)
-                            rel = rel.reshape(batch_size,seg_len,-1)
-                            rel = rel.permute(0, 2, 1)
-                            input_data = torch.cat([absolute, rel], dim=2)
-                            
-                            absolute = target_data[:, :, :, 0:18]
-                            rel = target_data[:, :, :, 18:]
-                            absolute = absolute.permute(0,2,1,3)
-                            absolute = absolute.reshape(batch_size,seg_len,-1)
-                            absolute = absolute.permute(0, 2, 1)
-                            rel = rel.permute(0,2,1,3)
-                            rel = rel.reshape(batch_size,seg_len,-1)
-                            rel = rel.permute(0, 2, 1)
-                            target_data = torch.cat([absolute, rel], dim=2)
-                        elif num_kp == 38:
-                            absolute = input_data[:, :, :, 0:19]
-                            rel = input_data[:, :, :, 19:]
-                            absolute = absolute.permute(0,2,1,3)
-                            absolute = absolute.reshape(batch_size,seg_len,-1)
-                            absolute = absolute.permute(0, 2, 1)
-                            rel = rel.permute(0,2,1,3)
-                            rel = rel.reshape(batch_size,seg_len,-1)
-                            rel = rel.permute(0, 2, 1)
-                            input_data = torch.cat([absolute, rel], dim=2)
-                            
-                            absolute = target_data[:, :, :, 0:19]
-                            rel = target_data[:, :, :, 19:]
-                            absolute = absolute.permute(0,2,1,3)
-                            absolute = absolute.reshape(batch_size,seg_len,-1)
-                            absolute = absolute.permute(0, 2, 1)
-                            rel = rel.permute(0,2,1,3)
-                            rel = rel.reshape(batch_size,seg_len,-1)
-                            rel = rel.permute(0, 2, 1)
-                            target_data = torch.cat([absolute, rel], dim=2)    
-                        else:
-                            input_data = input_data.permute(0,2,1,3)
-                            input_data = input_data.reshape(batch_size,seg_len,-1)
-                            input_data = input_data.permute(0, 2, 1)
-                            
-                            target_data = target_data.permute(0,2,1,3)
-                            target_data = target_data.reshape(batch_size,seg_len,-1)
-                            target_data = target_data.permute(0, 2, 1)
-                    elif args.token_config == "st":
-                        if num_kp == 36:
-                            absolute = input_data[:, :, :, 0:18]
-                            rel = input_data[:, :, :, 18:]
-                            absolute = absolute.permute(0, 1, 3, 2)
-                            absolute = absolute.reshape(batch_size,channels,-1)
-                            absolute = absolute.permute(0, 2, 1)
-                            rel = rel.permute(0, 1, 3, 2)
-                            rel = rel.reshape(batch_size,channels,-1)
-                            rel = rel.permute(0, 2, 1)
-                            input_data = torch.cat([absolute, rel], dim=2)
-                            
-                            absolute = target_data[:, :, :, 0:18]
-                            rel = target_data[:, :, :, 18:]
-                            absolute = absolute.permute(0, 1, 3, 2)
-                            absolute = absolute.reshape(batch_size,channels,-1)
-                            absolute = absolute.permute(0, 2, 1)
-                            rel = rel.permute(0, 1, 3, 2)
-                            rel = rel.reshape(batch_size,channels,-1)
-                            rel = rel.permute(0, 2, 1)
-                            target_data = torch.cat([absolute, rel], dim=2)
-                        if num_kp == 38:
-                            absolute = input_data[:, :, :, 0:19]
-                            rel = input_data[:, :, :, 19:]
-                            absolute = absolute.permute(0, 1, 3, 2)
-                            absolute = absolute.reshape(batch_size,channels,-1)
-                            absolute = absolute.permute(0, 2, 1)
-                            rel = rel.permute(0, 1, 3, 2)
-                            rel = rel.reshape(batch_size,channels,-1)
-                            rel = rel.permute(0, 2, 1)
-                            input_data = torch.cat([absolute, rel], dim=2)
-                            
-                            absolute = target_data[:, :, :, 0:19]
-                            rel = target_data[:, :, :, 19:]
-                            absolute = absolute.permute(0, 1, 3, 2)
-                            absolute = absolute.reshape(batch_size,channels,-1)
-                            absolute = absolute.permute(0, 2, 1)
-                            rel = rel.permute(0, 1, 3, 2)
-                            rel = rel.reshape(batch_size,channels,-1)
-                            rel = rel.permute(0, 2, 1)
-                            target_data = torch.cat([absolute, rel], dim=2)    
-                        else:
-                            input_data = input_data.permute(0, 1, 3, 2)
-                            input_data = input_data.reshape(batch_size,channels,-1)
-                            input_data = input_data.permute(0, 2, 1)
-                            
-                            target_data = target_data.permute(0, 1, 3, 2)
-                            target_data = target_data.reshape(batch_size,channels,-1)
-                            target_data = target_data.permute(0, 2, 1)
 
-                    pred = self.model.forward(input_data, target_data)
-                    loss = self.loss.calculate(target_data, pred)
-                    eval_loss.extend(loss.cpu().numpy())
-            auc_roc, auc_pr, eer, eer_th, fpr_at_target_fnr, threshold_at_target_fnr = score_dataset(np.array(eval_loss), self.test_loader.dataset.metadata, args=args)
-            writer.add_scalar('AUC ROC', auc_roc, epoch)
-            writer.add_scalar('AUC PR', auc_pr, epoch)
-            writer.add_scalar('EER', eer, epoch)
-            writer.add_scalar('EER TH', eer_th, epoch)
-            writer.add_scalar('10ER', fpr_at_target_fnr, epoch)
-            writer.add_scalar('10ER TH', threshold_at_target_fnr, epoch)
-            
-            print('AUC ROC: {}'.format(auc_roc))
-            print('AUC PR: {}'.format(auc_pr))
-            print('EER: {}'.format(eer))
-            print('EER TH: {}'.format(eer_th))
-            print('10ER: {}'.format(fpr_at_target_fnr))
-            print('10ER TH: {}'.format(threshold_at_target_fnr))
-            if auc_roc > best_roc:
-                best_roc = auc_roc
-                self.save_checkpoint(epoch, args=args, filename=checkpoint_filename)
-                print("Model saved!")
+            # Decide if we should run eval this epoch (always run on final epoch)
+            should_eval = (
+                (not args.disable_eval_during_train and eval_interval > 0 and (epoch + 1) % eval_interval == 0)
+                or (epoch == num_epochs - 1)
+            )
+
+            eval_metrics = None
+            if should_eval:
+                eval_metrics = self.run_eval(args, writer, epoch)
+                if eval_metrics["auc_roc"] > best_roc:
+                    best_roc = eval_metrics["auc_roc"]
+                    best_epoch = epoch
+                    self.save_checkpoint(epoch, args=args, filename="checkpoint_best", is_best=True)
+                    print("Best model updated (ROC).")
+
+            # Save checkpoints every 10 epochs regardless of eval
+            if (epoch + 1) % 10 == 0:
+                self.save_checkpoint(epoch, args=args, filename="checkpoint_epoch")
+
+            # Log history for this epoch
+            with open(metrics_path, "a", newline="") as csvfile:
+                csv_writer = csv.writer(csvfile)
+                csv_writer.writerow([
+                    epoch,
+                    float(epoch_loss),
+                    eval_metrics["eval_loss_mean"] if eval_metrics else '',
+                    eval_metrics["auc_roc"] if eval_metrics else '',
+                    eval_metrics["auc_pr"] if eval_metrics else '',
+                    eval_metrics["eer"] if eval_metrics else '',
+                    eval_metrics["eer_th"] if eval_metrics else '',
+                    eval_metrics["fpr_at_target_fnr"] if eval_metrics else '',
+                    eval_metrics["threshold_at_target_fnr"] if eval_metrics else '',
+                    new_lr
+                ])
 
                 
         if os.path.exists(os.path.split(args.model_save_dir)[0]+"/"+"roc.csv"):
         # Open the existing CSV file for appending
             with open(os.path.split(args.model_save_dir)[0]+"/"+"roc.csv", "a", newline="") as file:
-                writer = csv.writer(file)
+                csv_writer_local = csv.writer(file)
                 # Append a new row with the AUC-ROC value and path
-                writer.writerow([best_roc, args.model_save_dir])
+                csv_writer_local.writerow([best_roc, args.model_save_dir])
         else:
             # Create a new CSV file "roc.csv" and write the header
             with open(os.path.split(args.model_save_dir)[0]+"/"+"roc.csv", "w", newline="") as file:
-                writer = csv.writer(file)
+                csv_writer_local = csv.writer(file)
                 # Write the header row
-                writer.writerow(["auc_roc", "model_path"])
+                csv_writer_local.writerow(["auc_roc", "model_path"])
                 # Write the first data row
-                writer.writerow([best_roc, args.model_save_dir])
+                csv_writer_local.writerow([best_roc, args.model_save_dir])
         
+        # Always save a final checkpoint, even if AUC did not improve
+        self.save_checkpoint(num_epochs - 1, args=args, filename="checkpoint_last")
+
+        # Final evaluation using the best checkpoint (or last if none)
+        if best_epoch is not None:
+            ckpt_path = os.path.join(args.model_save_dir, "checkpoint_best.pth.tar")
+            checkpoint = torch.load(ckpt_path, map_location=args.device)
+            self.model.load_state_dict(checkpoint["state_dict"])
+            print(f"Loaded best checkpoint from epoch {best_epoch} for final evaluation.")
+        else:
+            print("No best checkpoint recorded; using last weights for final evaluation.")
+
+        final_metrics = self.run_eval(args, writer, num_epochs - 1)
+        with open(metrics_path, "a", newline="") as csvfile:
+            csv_writer = csv.writer(csvfile)
+            csv_writer.writerow([
+                "final_best",
+                '',
+                final_metrics["eval_loss_mean"],
+                final_metrics["auc_roc"],
+                final_metrics["auc_pr"],
+                final_metrics["eer"],
+                final_metrics["eer_th"],
+                final_metrics["fpr_at_target_fnr"],
+                final_metrics["threshold_at_target_fnr"],
+                ''
+            ])
+
         return checkpoint_filename
 
 

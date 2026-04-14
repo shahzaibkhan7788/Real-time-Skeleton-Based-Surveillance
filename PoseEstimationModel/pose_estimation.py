@@ -259,6 +259,7 @@ class MMPoseTopDownEstimator(PoseEstimatorBase):
         self.model = init_model(str(model_paths.config), str(model_paths.checkpoint), device=cfg.pose_cfg.get("device", "cpu"))
         self.inference_topdown = inference_topdown
         self.conf_threshold = float(cfg.pose_cfg.get("confidence_threshold", 0.25))
+        self.expected_kp = None  # determined on first valid frame
 
     def _estimate(self, frame, bbox):
         results = self.inference_topdown(self.model, frame, [bbox])
@@ -313,7 +314,19 @@ class MMPoseTopDownEstimator(PoseEstimatorBase):
                 for p in frame_map.get(frame_id, []):
                     pose = self._estimate(frame, p["bbox"])
                     if pose and pose["mean"] >= self.conf_threshold:
-                        sparta_json[str(p["person_id"])][str(frame_id)] = pose["keypoints"]
+                        # Enforce consistent keypoint count
+                        kp_count = len(pose["keypoints"])
+                        if self.expected_kp is None:
+                            self.expected_kp = kp_count
+                        if kp_count != self.expected_kp:
+                            print(f"[WARN] Skipping frame {frame_id} person {p['person_id']}: "
+                                  f"kpt count {kp_count} != expected {self.expected_kp}")
+                            continue
+                        flat = [c for trip in pose["keypoints"] for c in trip]
+                        sparta_json[str(p["person_id"])][str(frame_id)] = {
+                            "keypoints": flat,
+                            "scores": float(pose.get("mean", 0.0))
+                        }
                         if writer is not None:
                             for (x, y, s) in pose["keypoints"]:
                                 if s >= self.cfg.pose_cfg.get("min_keypoint_confidence", 0.3):
@@ -341,6 +354,7 @@ class YoloPoseEstimator(PoseEstimatorBase):
         self.model = YOLO(str(model_paths.weights))
         self.conf = float(cfg.pose_cfg.get("confidence_threshold", 0.25))
         self.min_kpt_conf = float(cfg.pose_cfg.get("min_keypoint_confidence", 0.3))
+        self.expected_kp = None  # determined on first valid frame
 
     def process(
         self,
@@ -388,10 +402,20 @@ class YoloPoseEstimator(PoseEstimatorBase):
                     ):
                         kps = res[0].keypoints.xy[0].cpu().numpy()
                         confs = res[0].keypoints.conf[0].cpu().numpy()
+                        if self.expected_kp is None:
+                            self.expected_kp = kps.shape[0]
+                        if kps.shape[0] != self.expected_kp:
+                            print(f"[WARN] Skipping frame {frame_id} person {p['person_id']}: "
+                                  f"kpt count {kps.shape[0]} != expected {self.expected_kp}")
+                            continue
                         kps[:, 0] += x1
                         kps[:, 1] += y1
                         triplets = [[float(x), float(y), float(c)] for (x, y), c in zip(kps, confs)]
-                        sparta_json[str(p["person_id"])][str(frame_id)] = triplets
+                        flat = [c for trip in triplets for c in trip]
+                        sparta_json[str(p["person_id"])][str(frame_id)] = {
+                            "keypoints": flat,
+                            "scores": float(confs.mean()) if len(confs) else 0.0
+                        }
                         if writer is not None:
                             for (x, y), c in zip(kps, confs):
                                 if c >= self.min_kpt_conf:

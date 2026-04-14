@@ -100,7 +100,23 @@ def gen_clip_seg_data_np(clip_dict, start_ofst=0, seg_stride=4, seg_len=24, scen
     if len(global_pose_data) == 0:
         global_pose_data_np = np.empty(0).reshape(0, 17, 3)
     else:
-        global_pose_data_np = np.concatenate(global_pose_data, axis=0)
+        shapes = [np.array(g).shape for g in global_pose_data]
+        unique_shapes = {}
+        for s in shapes:
+            unique_shapes[s] = unique_shapes.get(s, 0) + 1
+        if len(unique_shapes) > 1:
+            print(f"[DEBUG] Inconsistent global_pose_data shapes for scene {scene_id}, clip {clip_id}: {unique_shapes}")
+            # show first offending index
+            first_shape = shapes[0]
+            for idx, s in enumerate(shapes):
+                if s != first_shape:
+                    print(f"[DEBUG] First mismatch at idx {idx}: shape {s}")
+                    break
+        try:
+            global_pose_data_np = np.concatenate(global_pose_data, axis=0)
+        except ValueError as e:
+            print(f"[ERROR] Concatenate failed for scene {scene_id}, clip {clip_id}. Shapes: {unique_shapes}")
+            raise
     del pose_segs_data
     # del global_pose_data
     if ret_keys:
@@ -118,12 +134,52 @@ def single_pose_dict2np(person_dict, idx):
         for sub_dict in single_person:
             single_person_dict.update(**sub_dict)
         single_person = single_person_dict
-    single_person_dict_keys = sorted(single_person.keys())
-    sing_pose_meta = [int(float(idx)), int(float(single_person_dict_keys[0]))]  # Meta is [index, first_frame]
-    for key in single_person_dict_keys:
-        curr_pose_np = np.array(single_person[key]['keypoints']).reshape(-1, 3)
-        sing_pose_np.append(curr_pose_np)
-        sing_scores_np.append(single_person[key]['scores'])
+    # Some preprocessed datasets store each person's poses as a dict keyed by
+    # frame numbers ("0", "1", ...) while others store two lists
+    # {"keypoints": [...], "scores": [...]} of equal length. Handle both.
+    if set(single_person.keys()) >= {"keypoints", "scores"} and \
+            isinstance(single_person["keypoints"], list) and isinstance(single_person["scores"], list):
+        # New format: lists of frame-wise keypoints and scores
+        num_frames = len(single_person["keypoints"])
+        single_person_dict_keys = list(range(num_frames))
+        sing_pose_meta = [int(float(idx)), 0]  # start frame unknown; assume 0
+        for frame_idx in range(num_frames):
+            curr_pose_np = np.array(single_person["keypoints"][frame_idx]).reshape(-1, 3)
+            sing_pose_np.append(curr_pose_np)
+            sing_scores_np.append(single_person["scores"][frame_idx])
+    else:
+        single_person_dict_keys = sorted(single_person.keys())
+        sing_pose_meta = [int(float(idx)), int(float(single_person_dict_keys[0]))]  # Meta is [index, first_frame]
+        for key in single_person_dict_keys:
+            entry = single_person[key]
+            # Case A: dict with keypoints/scores (flat or triplets)
+            if isinstance(entry, dict) and 'keypoints' in entry:
+                kpts = entry['keypoints']
+                # If flat list of numbers, reshape to triplets
+                if isinstance(kpts, list) and kpts and isinstance(kpts[0], (int, float)):
+                    kpts_np = np.array(kpts, dtype=float).reshape(-1, 3)
+                else:
+                    kpts_np = np.array(kpts, dtype=float).reshape(-1, 3)
+                curr_pose_np = kpts_np
+                scores_field = entry.get('scores', None)
+                if scores_field is None:
+                    curr_scores_np = curr_pose_np[:, 2]
+                else:
+                    scores_np = np.array(scores_field, dtype=float).reshape(-1)
+                    if scores_np.size == 1:
+                        curr_scores_np = np.full((curr_pose_np.shape[0],), scores_np.item(), dtype=float)
+                    else:
+                        curr_scores_np = scores_np
+            # Case B: list of [x,y,score] triplets (our pipeline output)
+            elif isinstance(entry, list) and len(entry) and isinstance(entry[0], (list, tuple)) and len(entry[0]) >= 3:
+                curr_pose_np = np.array(entry, dtype=float)[:, :3].reshape(-1, 3)
+                curr_scores_np = curr_pose_np[:, 2]
+            else:
+                # Unsupported entry; skip
+                continue
+            sing_pose_np.append(curr_pose_np)
+            sing_scores_np.append(curr_scores_np)
+
     sing_pose_np = np.stack(sing_pose_np, axis=0)
     sing_scores_np = np.stack(sing_scores_np, axis=0)
     return sing_pose_np, sing_pose_meta, single_person_dict_keys, sing_scores_np
@@ -177,7 +233,11 @@ def split_pose_to_segments(single_pose_np, single_pose_meta, single_pose_keys, s
         start_key = single_pose_keys_sorted[start_ind]
         if is_seg_continuous(single_pose_keys_sorted, start_key, seg_len):
             curr_segment = single_pose_np[start_ind:start_ind + seg_len].reshape(1, seg_len, kp_count, kp_dim)
-            curr_score = single_score_np[start_ind:start_ind + seg_len].reshape(1, seg_len)
+            score_slice = single_score_np[start_ind:start_ind + seg_len]
+            # If scores are per-keypoint (frame, K), collapse to per-frame mean
+            if score_slice.ndim > 1:
+                score_slice = np.mean(score_slice, axis=1)
+            curr_score = score_slice.reshape(1, seg_len)
             pose_segs_np = np.append(pose_segs_np, curr_segment, axis=0)
             pose_score_np = np.append(pose_score_np, curr_score, axis=0)
             if dataset == "UBnormal":
