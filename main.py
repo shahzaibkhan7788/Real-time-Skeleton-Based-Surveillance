@@ -60,6 +60,14 @@ def main ():
         np.random.seed(0)
     args, model_args = init_sub_args(args)
     args.ckpt_dir = create_exp_dirs(args.exp_dir, dirmap=args.dataset)
+
+    # Normalize friendly branch labels to internal branch names
+    branch_map = {
+        "Reconstruction Model": "SPARTA_C",
+        "Future trajecory prediction model": "SPARTA_F",
+        "Hybrid": "SPARTA_H",
+    }
+    args.branch = branch_map.get(args.branch, args.branch)
  
     pretrained_model = (args.mode == "test") or (args.branch == "SPARTA_H") or bool(vars(args).get('model_ckpt_dir'))
     recon_encoder = vars(args).get('recon_encoder_path', None)
@@ -101,35 +109,14 @@ def main ():
                 extra_dim = 2
         input_dim = args.num_kp*2
     
-    # ---------------------------------------------------------
-    # TRACE 3: Safety Inspection (No infinite loops!)
-    # ---------------------------------------------------------
-    target_loader = loader['train'] if loader.get('train') is not None else loader.get('test')
-    
+    target_loader = loader.get('train') or loader.get('test')
     if target_loader:
-        example_batch = next(iter(target_loader))
-        
-        print(f"\n[TRACE] Batch type: {type(example_batch)}")
-        
-        if isinstance(example_batch, list):
-            print(f"[TRACE] Batch is a list of {len(example_batch)} items.")
-            
-            # Usually: Index 0 = Poses, Index 1 = Labels
-            for i, item in enumerate(example_batch):
-                item_type = type(item)
-                item_shape = item.shape if hasattr(item, 'shape') else "No Shape"
-                print(f"  -> Item {i}: Type={item_type}, Shape={item_shape}")
-            
-            # Now let's grab the actual Pose Tensor (Item 0)
-            pose_data = example_batch
-            
-            # Print value range to confirm it's numerical data
-            if hasattr(pose_data, 'min'):
-                print(f"\n[TRACE] Confirmed Pose Tensor shape: {pose_data.shape}")
-                print(f"[TRACE] Value Range: Min={pose_data.min():.4f}, Max={pose_data.max():.4f}")
-        else:
-            print(f"[TRACE] Batch is a dictionary. Keys: {example_batch.keys()}")
+        print(f"[INFO] Dataset loader is ready: {type(target_loader)}")
     
+    Transformer_model = None
+    tokenizer = None
+    tokenizer_c = None
+    tokenizer_f = None
     if args.branch == "SPARTA_C":
         Transformer_model = SPARTA_C(input_dim*expand_ratio+extra_dim, model_args.num_heads, model_args.latent_dim, model_args.num_layers, 1000, device=args.device, dropout=args.dropout)
         tokenizer = Tokenizer(args=args)
@@ -140,6 +127,8 @@ def main ():
         Transformer_model = SPARTA_H(input_dim*expand_ratio+extra_dim, model_args.num_heads, model_args.latent_dim, model_args.num_layers, 1000, device=args.device, dropout=args.dropout)
         tokenizer_f = Tokenizer(args_f)  # Tokenizer for SPARTA_F logic
         tokenizer_c = Tokenizer(args_c)  # Tokenizer for SPARTA_C logic
+    else:
+        raise ValueError(f"Unsupported branch '{args.branch}'. Expected SPARTA_C, SPARTA_F, or SPARTA_H.")
    
     if not pretrained_model:
         if not os.path.exists(args.model_save_dir):

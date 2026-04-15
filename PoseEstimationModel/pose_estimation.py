@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import colorsys
 import os
 from argparse import Namespace
 from collections import defaultdict
@@ -24,6 +25,23 @@ from ultralytics.engine.results import Boxes
 
 
 # ---------- Config helpers ----------
+
+# COCO 17 Connections: Pairs of keypoint indices to connect
+SKELETON_CONNECTIONS = [
+    (15, 13), (13, 11), (16, 14), (14, 12), (11, 12), # Legs/Hips
+    (5, 11), (6, 12), (5, 6),                        # Torso
+    (5, 7), (6, 8), (7, 9), (8, 10),                 # Arms
+    (1, 2), (0, 1), (0, 2), (1, 3), (2, 4),          # Head
+    (3, 5), (4, 6)                                   # Ears to Shoulders
+]
+
+def _random_vibrant_bgr(rng: random.Random) -> tuple[int, int, int]:
+    # Use HSV to avoid dark/greyish random RGBs; OpenCV uses BGR.
+    h = rng.random()
+    s = 0.75 + 0.25 * rng.random()
+    v = 0.75 + 0.25 * rng.random()
+    r, g, b = colorsys.hsv_to_rgb(h, s, v)
+    return (int(b * 255), int(g * 255), int(r * 255))
 
 @dataclass
 class ModelPaths:
@@ -260,6 +278,11 @@ class MMPoseTopDownEstimator(PoseEstimatorBase):
         self.inference_topdown = inference_topdown
         self.conf_threshold = float(cfg.pose_cfg.get("confidence_threshold", 0.25))
         self.expected_kp = None  # determined on first valid frame
+        rng = random.Random(os.urandom(16))
+        # One dynamic color per run (same across all persons for this video).
+        self._vis_color = _random_vibrant_bgr(rng)
+        self._vis_line_thickness = int(cfg.pose_cfg.get("vis_line_thickness", 2))
+        self._vis_kpt_radius = int(cfg.pose_cfg.get("vis_kpt_radius", 2))
 
     def _estimate(self, frame, bbox):
         results = self.inference_topdown(self.model, frame, [bbox])
@@ -314,35 +337,61 @@ class MMPoseTopDownEstimator(PoseEstimatorBase):
                 for p in frame_map.get(frame_id, []):
                     pose = self._estimate(frame, p["bbox"])
                     if pose and pose["mean"] >= self.conf_threshold:
-                        # Enforce consistent keypoint count
                         kp_count = len(pose["keypoints"])
                         if self.expected_kp is None:
                             self.expected_kp = kp_count
                         if kp_count != self.expected_kp:
-                            print(f"[WARN] Skipping frame {frame_id} person {p['person_id']}: "
-                                  f"kpt count {kp_count} != expected {self.expected_kp}")
                             continue
+                        
                         flat = [c for trip in pose["keypoints"] for c in trip]
                         sparta_json[str(p["person_id"])][str(frame_id)] = {
                             "keypoints": flat,
                             "scores": float(pose.get("mean", 0.0))
                         }
+
+                        # --- Visualization Block ---
                         if writer is not None:
-                            for (x, y, s) in pose["keypoints"]:
-                                if s >= self.cfg.pose_cfg.get("min_keypoint_confidence", 0.3):
-                                    cv2.circle(frame, (int(x), int(y)), 3, (0, 255, 0), -1)
+                            kpts = pose["keypoints"]
+                            min_kpt_conf = float(self.cfg.pose_cfg.get("min_keypoint_confidence", 0.3))
+                            color = self._vis_color
+
+                            # 1. Draw Skeleton Lines
+                            for start_idx, end_idx in SKELETON_CONNECTIONS:
+                                if start_idx < kp_count and end_idx < kp_count:
+                                    x1, y1, s1 = kpts[start_idx]
+                                    x2, y2, s2 = kpts[end_idx]
+                                    if s1 >= min_kpt_conf and s2 >= min_kpt_conf:
+                                        cv2.line(
+                                            frame,
+                                            (int(x1), int(y1)),
+                                            (int(x2), int(y2)),
+                                            color,
+                                            self._vis_line_thickness,
+                                            lineType=cv2.LINE_AA,
+                                        )
+
+                            # 2. Draw Keypoint Dots
+                            for (x, y, s) in kpts:
+                                if s >= min_kpt_conf:
+                                    cv2.circle(
+                                        frame,
+                                        (int(x), int(y)),
+                                        self._vis_kpt_radius,
+                                        color,
+                                        -1,
+                                        lineType=cv2.LINE_AA,
+                                    )
+                
                 if writer is not None:
                     writer.write(frame)
                 frame_id += 1
                 pbar.update(1)
 
         cap.release()
-        if writer is not None:
-            writer.release()
+        if writer is not None: writer.release()
         fname = output_name or f"{video_path.stem}{json_suffix}"
         out = output_dir / fname
-        with open(out, "w") as f: 
-            json.dump(sparta_json, f, indent=2)
+        with open(out, "w") as f: json.dump(sparta_json, f, indent=2)
         return out
 
 
@@ -355,6 +404,11 @@ class YoloPoseEstimator(PoseEstimatorBase):
         self.conf = float(cfg.pose_cfg.get("confidence_threshold", 0.25))
         self.min_kpt_conf = float(cfg.pose_cfg.get("min_keypoint_confidence", 0.3))
         self.expected_kp = None  # determined on first valid frame
+        rng = random.Random(os.urandom(16))
+        # One dynamic color per run (same across all persons for this video).
+        self._vis_color = _random_vibrant_bgr(rng)
+        self._vis_line_thickness = int(cfg.pose_cfg.get("vis_line_thickness", 1))
+        self._vis_kpt_radius = int(cfg.pose_cfg.get("vis_kpt_radius", 2))
 
     def process(
         self,
@@ -369,8 +423,7 @@ class YoloPoseEstimator(PoseEstimatorBase):
         output_dir.mkdir(parents=True, exist_ok=True)
         sparta_json = defaultdict(dict)
         frame_map = defaultdict(list)
-        for d in detections:
-            frame_map[d["frame_id"]].append(d)
+        for d in detections: frame_map[d["frame_id"]].append(d)
 
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         writer = None
@@ -385,53 +438,97 @@ class YoloPoseEstimator(PoseEstimatorBase):
         with tqdm(total=total, desc="YOLO Pose") as pbar:
             while True:
                 ret, frame = cap.read()
-                if not ret:
-                    break
+                if not ret: break
                 persons = frame_map.get(frame_id, [])
                 for p in persons:
                     x1, y1, x2, y2 = map(int, p["bbox"])
+                    frame_h, frame_w = frame.shape[:2]
+                    # Clamp bbox to frame to avoid negative indices wrapping from the end.
+                    x1 = max(0, min(frame_w - 1, x1))
+                    y1 = max(0, min(frame_h - 1, y1))
+                    x2 = max(0, min(frame_w, x2))
+                    y2 = max(0, min(frame_h, y2))
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+
                     roi = frame[y1:y2, x1:x2]
                     if roi.size == 0:
                         continue
-                    res = self.model(roi, conf=self.conf, verbose=False)
-                    if (
-                        len(res)
-                        and res[0].keypoints is not None
-                        and res[0].keypoints.xy is not None
-                        and len(res[0].keypoints.xy) > 0
-                    ):
-                        kps = res[0].keypoints.xy[0].cpu().numpy()
-                        confs = res[0].keypoints.conf[0].cpu().numpy()
-                        if self.expected_kp is None:
-                            self.expected_kp = kps.shape[0]
-                        if kps.shape[0] != self.expected_kp:
-                            print(f"[WARN] Skipping frame {frame_id} person {p['person_id']}: "
-                                  f"kpt count {kps.shape[0]} != expected {self.expected_kp}")
+
+                    # Ultralytics returns a list[Results] for inference on an array.
+                    results = self.model(roi, conf=self.conf, verbose=False)
+                    if isinstance(results, (list, tuple)):
+                        if not results:
                             continue
-                        kps[:, 0] += x1
-                        kps[:, 1] += y1
-                        triplets = [[float(x), float(y), float(c)] for (x, y), c in zip(kps, confs)]
-                        flat = [c for trip in triplets for c in trip]
-                        sparta_json[str(p["person_id"])][str(frame_id)] = {
-                            "keypoints": flat,
-                            "scores": float(confs.mean()) if len(confs) else 0.0
-                        }
-                        if writer is not None:
-                            for (x, y), c in zip(kps, confs):
-                                if c >= self.min_kpt_conf:
-                                    cv2.circle(frame, (int(x), int(y)), 3, (0, 255, 0), -1)
-                if writer is not None:
-                    writer.write(frame)
+                        result = results[0]
+                    else:
+                        result = results
+
+                    kpt_obj = getattr(result, "keypoints", None)
+                    if kpt_obj is None or getattr(kpt_obj, "xy", None) is None or getattr(kpt_obj, "conf", None) is None:
+                        continue
+                    if len(kpt_obj.xy) == 0:
+                        continue
+
+                    # If multiple poses are detected inside the ROI, pick the most confident.
+                    best_i = 0
+                    boxes = getattr(result, "boxes", None)
+                    if boxes is not None and getattr(boxes, "conf", None) is not None and len(boxes.conf) > 0:
+                        try:
+                            best_i = int(boxes.conf.argmax().item())
+                        except Exception:
+                            best_i = 0
+
+                    kps = kpt_obj.xy[best_i].cpu().numpy()
+                    confs = kpt_obj.conf[best_i].cpu().numpy()
+
+                    if self.expected_kp is None:
+                        self.expected_kp = kps.shape
+                    if kps.shape != self.expected_kp:
+                        continue
+
+                    kps[:, 0] += x1
+                    kps[:, 1] += y1
+
+                    triplets = [[float(x), float(y), float(c)] for (x, y), c in zip(kps, confs)]
+                    flat = [c for trip in triplets for c in trip]
+                    sparta_json[str(p["person_id"])][str(frame_id)] = {
+                        "keypoints": flat,
+                        "scores": float(confs.mean()),
+                    }
+
+                    # --- Visualization Block ---
+                    if writer is not None:
+                        color = self._vis_color
+                        # 1. Draw Skeleton Lines
+                        for start_idx, end_idx in SKELETON_CONNECTIONS:
+                            if start_idx < len(kps) and end_idx < len(kps):
+                                if confs[start_idx] >= self.min_kpt_conf and confs[end_idx] >= self.min_kpt_conf:
+                                    p1 = (int(kps[start_idx][0]), int(kps[start_idx][1]))
+                                    p2 = (int(kps[end_idx][0]), int(kps[end_idx][1]))
+                                    cv2.line(frame, p1, p2, color, self._vis_line_thickness, lineType=cv2.LINE_AA)
+
+                        # 2. Draw Keypoint Dots
+                        for (x, y), c in zip(kps, confs):
+                            if c >= self.min_kpt_conf:
+                                cv2.circle(
+                                    frame,
+                                    (int(x), int(y)),
+                                    self._vis_kpt_radius,
+                                    color,
+                                    -1,
+                                    lineType=cv2.LINE_AA,
+                                )
+
+                if writer is not None: writer.write(frame)
                 frame_id += 1
                 pbar.update(1)
 
         cap.release()
-        if writer is not None:
-            writer.release()
+        if writer is not None: writer.release()
         fname = output_name or f"{video_path.stem}{json_suffix}"
         out = output_dir / fname
-        with open(out, "w") as f:
-            json.dump(sparta_json, f, indent=2)
+        with open(out, "w") as f: json.dump(sparta_json, f, indent=2)
         return out
 
 

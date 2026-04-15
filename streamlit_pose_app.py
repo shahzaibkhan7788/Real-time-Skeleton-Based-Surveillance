@@ -125,6 +125,12 @@ def build_sparta_config(base_cfg: Dict, sparta_branch: str, ckpt_c: str, ckpt_f:
         "device": device if device != "auto" else base_cfg.get("models", {}).get("pose", {}).get("device", "cpu"),
         "dataset": base_cfg.get("dataset", "corridor"),
     }
+    friendly_branch_map = {
+        "Reconstruction Model": "SPARTA_C",
+        "Future trajecory prediction model": "SPARTA_F",
+        "Hybrid": "SPARTA_H",
+    }
+    sparta_branch = friendly_branch_map.get(sparta_branch, sparta_branch)
     if sparta_branch == "SPARTA_H":
         sparta_cfg["model_ckpt_C"] = ckpt_c
         sparta_cfg["model_ckpt_F"] = ckpt_f
@@ -139,23 +145,156 @@ def build_sparta_config(base_cfg: Dict, sparta_branch: str, ckpt_c: str, ckpt_f:
     return sparta_cfg
 
 def main():
-    st.set_page_config(page_title="Pose & SPARTA Lab", page_icon="🕺", layout="wide")
+    st.set_page_config(page_title="Human Surveillance Application", page_icon="🕺", layout="wide")
     st.markdown(
         """
         <style>
-        .big-button button {width:100%; border-radius:12px; height:3rem; font-weight:700;}
-        .metric-card {padding:12px 16px; border-radius:12px; background:#0c111c0d; border:1px solid #e5e7eb;}
+        :root{
+          --brand:#3b82f6;
+          --brand-2:#60a5fa;
+          --brand-dark:#1d4ed8;
+          --ink:#0f172a;
+          --muted:#475569;
+          --border:rgba(148,163,184,0.55);
+        }
+
+        /* Sharper, cleaner overall look */
+        [data-testid="stAppViewContainer"]{
+          background:
+            radial-gradient(900px 420px at 12% 0%, rgba(59,130,246,0.22), transparent 62%),
+            radial-gradient(760px 460px at 92% 12%, rgba(96,165,250,0.16), transparent 56%),
+            linear-gradient(180deg, #ffffff 0%, #f8fafc 68%, #f1f5f9 100%);
+        }
+        [data-testid="stHeader"]{ background: transparent; }
+	        section.main > div.block-container{
+	          padding-top: 2.1rem;
+	          padding-bottom: 2.4rem;
+	        }
+	        h1, h2, h3{ color: var(--ink); letter-spacing: -0.01em; }
+	        [data-testid="stCaptionContainer"]{ color: rgba(71,85,105,0.95); }
+
+	        /* Two-panel layout as clean cards */
+	        div[data-testid="stHorizontalBlock"]{
+	          gap: 1.25rem;
+	        }
+	        div[data-testid="column"]{
+	          background: rgba(255,255,255,0.86);
+	          border: 1px solid rgba(148,163,184,0.42);
+	          border-radius: 16px;
+	          padding: 0.95rem 0.95rem 0.55rem;
+	          box-shadow: 0 14px 28px rgba(15,23,42,0.06);
+	        }
+
+	        /* Primary button -> light blue (not red) */
+	        button[kind="primary"], div[data-testid="baseButton-primary"] button, button[data-testid="baseButton-primary"]{
+	          background: linear-gradient(90deg, var(--brand-dark) 0%, var(--brand) 45%, var(--brand-2) 100%) !important;
+	          border: 1px solid rgba(29,78,216,0.85) !important;
+	          color: #ffffff !important;
+	          border-radius: 14px;
+	          height: 3.05rem;
+	          font-weight: 750;
+	          box-shadow: 0 12px 22px rgba(29,78,216,0.20) !important;
+	        }
+	        button[kind="primary"]:hover, div[data-testid="baseButton-primary"] button:hover, button[data-testid="baseButton-primary"]:hover{
+	          filter: saturate(1.08) brightness(1.02);
+	          box-shadow: 0 16px 28px rgba(29,78,216,0.26);
+	          transform: translateY(-1px);
+	        }
+	        button[kind="primary"]:active, div[data-testid="baseButton-primary"] button:active, button[data-testid="baseButton-primary"]:active{
+	          transform: translateY(0px);
+	        }
+
+	        .big-button button {width:100%; border-radius:12px; height:3rem; font-weight:700;}
+	        .metric-card {padding:12px 16px; border-radius:12px; background:#0c111c0d; border:1px solid #e5e7eb;}
+
+	        /* Sharper inputs (select, text, number) */
+	        div[data-baseweb="select"] > div{
+	          border-radius: 12px;
+	          border: 1px solid var(--border);
+	          background: rgba(255,255,255,0.92);
+	        }
+	        div[data-baseweb="select"] > div:focus-within{
+	          border-color: var(--brand);
+	          box-shadow: 0 0 0 3px rgba(59,130,246,0.14);
+	        }
+	        div[data-testid="stTextInput"] input,
+	        div[data-testid="stNumberInput"] input{
+	          border-radius: 12px !important;
+	          border: 1px solid var(--border) !important;
+	          background: rgba(255,255,255,0.92) !important;
+	        }
+	        div[data-testid="stTextInput"] input:focus,
+	        div[data-testid="stNumberInput"] input:focus{
+	          border-color: var(--brand) !important;
+	          box-shadow: 0 0 0 3px rgba(59,130,246,0.14) !important;
+	        }
+
+	        /* Tabs accent */
+	        div[data-testid="stTabs"] button[aria-selected="true"]{
+	          color: var(--brand-dark) !important;
+	        }
+
+	        /* --- Video uploader: clean light-blue dropzone --- */
+	        :root{
+	          --upload-accent:var(--brand-2);
+          --upload-accent-strong:var(--brand);
+          --upload-bg:rgba(79, 141, 247, 0.06);
+          --upload-border:rgba(79, 141, 247, 0.35);
+          --upload-border-strong:rgba(79, 141, 247, 0.65);
+        }
+
+        div[data-testid="stFileUploader"], section[data-testid="stFileUploader"]{
+          border:1px solid var(--upload-border);
+          border-radius:14px;
+          padding:0.75rem 0.85rem 0.9rem;
+          background:linear-gradient(180deg, var(--upload-bg), rgba(255,255,255,0.0));
+        }
+
+        div[data-testid="stFileUploader"] label, section[data-testid="stFileUploader"] label{
+          font-weight:600;
+        }
+
+        div[data-testid="stFileUploaderDropzone"], section[data-testid="stFileUploaderDropzone"]{
+          border:2px dashed var(--upload-border-strong);
+          border-radius:12px;
+          background:rgba(255,255,255,0.88);
+        }
+
+        div[data-testid="stFileUploaderDropzone"]:hover, section[data-testid="stFileUploaderDropzone"]:hover{
+          border-color:var(--upload-accent-strong);
+          box-shadow:0 0 0 3px rgba(59,130,246,0.12);
+        }
+
+        div[data-testid="stFileUploaderDropzone"] svg, section[data-testid="stFileUploaderDropzone"] svg{
+          color:var(--upload-accent-strong);
+        }
+
+        div[data-testid="stFileUploaderDropzone"] button, section[data-testid="stFileUploaderDropzone"] button{
+          border:1px solid var(--upload-border-strong);
+          color:var(--upload-accent-strong);
+          background:rgba(255,255,255,0.95);
+        }
+
+        div[data-testid="stFileUploaderDropzone"] button:hover,
+        section[data-testid="stFileUploaderDropzone"] button:hover{
+          border-color:var(--upload-accent-strong);
+          background:rgba(59,130,246,0.08);
+        }
+
+        div[data-testid="stFileUploader"] small, section[data-testid="stFileUploader"] small{
+          color:rgba(15, 23, 42, 0.72);
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
-    st.title("Pose & SPARTA Lab")
-    st.caption("Upload a video → extract poses → run SPARTA anomaly scoring (C/F/H) → download scores.")
+    st.title("Human Surveillance Application")
+    st.caption("Upload a video → Detection stage will execute --> key points extraction stage execute → anomaly scoring model will execute")
     
     col_left, col_right = st.columns(2)
 
     with col_left:
-        st.subheader("Settings")
+        st.subheader("Pose Estimation Model Selection")
         preset = st.radio("Select Profile", list(PRESETS.keys()), horizontal=True)
         preset_info = PRESETS.get(preset)
 
@@ -171,12 +310,18 @@ def main():
         device = st.selectbox("Compute Device", ["cuda:0", "cpu", "auto"])
         save_video = st.toggle("Generate Visualization Video", value=True)
         st.divider()
-        st.markdown("#### SPARTA Settings")
-        sparta_branch = st.selectbox("SPARTA variant", ["SPARTA_C", "SPARTA_F", "SPARTA_H"])
+        st.markdown("#### Spatio Temporal Pose Model selection setting")
+        sparta_branch_display = st.selectbox("Scoring Variant", ["Reconstruction Model", "Future trajecory prediction model", "Hybrid"])
+        sparta_branch_map = {
+            "Reconstruction Model": "SPARTA_C",
+            "Future trajecory prediction model": "SPARTA_F",
+            "Hybrid": "SPARTA_H",
+        }
+        sparta_branch = sparta_branch_map.get(sparta_branch_display, sparta_branch_display)
         ckpt_defaults = BASE_CFG.get("models", {}).get("sparta", {}).get("checkpoints", {})
         if sparta_branch == "SPARTA_H":
-            ckpt_c = st.text_input("Checkpoint SPARTA_C", ckpt_defaults.get("sparta_h_c", ""))
-            ckpt_f = st.text_input("Checkpoint SPARTA_F", ckpt_defaults.get("sparta_h_f", ""))
+            ckpt_c = st.text_input("Checkpoint (C)", ckpt_defaults.get("sparta_h_c", ""))
+            ckpt_f = st.text_input("Checkpoint (F)", ckpt_defaults.get("sparta_h_f", ""))
         else:
             default_ckpt = ckpt_defaults.get("sparta_c" if sparta_branch == "SPARTA_C" else "sparta_f", "")
             ckpt_c = st.text_input("Checkpoint path", default_ckpt)
@@ -209,7 +354,7 @@ def main():
                 pipeline = PosePipeline(tmp_path)
                 final_json = pipeline.run()
             if final_json is None:
-                st.error("No persons detected; SPARTA inference skipped.")
+                st.error("No persons detected; anomaly scoring skipped.")
                 return
             
             # --- Show Results after successful run ---
@@ -221,7 +366,7 @@ def main():
             pose_vis_dir = out_dir / "pose_vis"
             vis_file = pose_vis_dir / f"{expected_stem}_vis.avi"
 
-            tab_pose, tab_sparta = st.tabs(["🎥 Pose Output", "⚡ SPARTA Scores"])
+            tab_pose, tab_sparta = st.tabs(["🎥 Pose Output", "⚡ Anomaly Scores"])
 
             with tab_pose:
                 if save_video:
@@ -234,14 +379,14 @@ def main():
                 st.info(f"Pose JSON saved to: {final_json}")
 
             with tab_sparta:
-                st.write("Runs SPARTA on the extracted pose JSON; no masks required.")
+                st.write("Runs anomaly scoring on the extracted pose JSON; no masks required.")
                 pose_json_dir = Path(final_json).parent
                 sparta_cfg = build_sparta_config(BASE_CFG, sparta_branch, ckpt_c, ckpt_f, pose_json_dir, device)
                 Path(sparta_cfg["save_results_dir"]).mkdir(parents=True, exist_ok=True)
                 with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=BASE_DIR, delete=False) as tmp_sparta:
                     yaml.safe_dump(sparta_cfg, tmp_sparta)
                     tmp_sparta_path = tmp_sparta.name
-                with st.spinner("Running SPARTA inference..."):
+                with st.spinner("Running anomaly scoring..."):
                     subprocess.run(["python", "main.py", "--config", tmp_sparta_path], cwd=BASE_DIR, check=True)
                 scores_files = sorted(Path(sparta_cfg["save_results_dir"]).glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
                 if scores_files:
@@ -252,7 +397,7 @@ def main():
                     with open(latest, "rb") as f:
                         st.download_button("📥 Download scores CSV", f, file_name=latest.name)
                 else:
-                    st.warning("No SPARTA score file was produced.")
+                    st.warning("No anomaly score file was produced.")
 
         except Exception as e:
             st.error(f"Pipeline Error: {e}")
