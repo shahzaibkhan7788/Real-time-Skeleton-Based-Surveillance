@@ -27,6 +27,7 @@ Notes
 * "final_best" rows are used for reference lines where available.
 """
 
+# python -c "import numpy as np; data=np.load('/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Preprocessedd-data/labels/01_0209.npy'); print(data)"
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
