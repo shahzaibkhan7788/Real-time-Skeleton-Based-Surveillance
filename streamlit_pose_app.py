@@ -5,6 +5,7 @@ import re
 import random
 import subprocess
 import pandas as pd
+import cv2
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Tuple
@@ -337,75 +338,96 @@ def main():
             st.video(upload)
 
     st.divider()
-    
-    if st.button("🚀 Start Processing", use_container_width=True, type="primary"):
+    if st.button("🚀 Start Analysis", use_container_width=True, type="primary"):
         if not video_path:
             st.error("Please upload a video first!")
-            return
+        else:
+            # 1. Setup Config
+            run_cfg = build_run_config(BASE_CFG, pose_family, pose_variant, det_variant, device, video_path, save_video)
+            
+            # Using a temporary file to avoid config conflicts
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=POSE_DIR, delete=False) as tmp:
+                yaml.safe_dump(run_cfg, tmp)
+                tmp_path = tmp.name
 
-        cfg = build_run_config(BASE_CFG, pose_family, pose_variant, det_variant, device, video_path, save_video)
-        
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=POSE_DIR, delete=False) as tmp:
-            yaml.safe_dump(cfg, tmp)
-            tmp_path = tmp.name
+            try:
+                # --- STEP 1: UNIFIED LIVE PROCESSING (Detection + Tracking + Pose) ---
+                st.markdown("### 🎥 Live Analysis Preview (Original vs Processed)")
+                
+                # Create two columns for side-by-side display
+                col_original, col_processed = st.columns(2)
+                
+                with col_original:
+                    st.write("**📹 Original Video**")
+                    original_video_placeholder = st.empty()
+                    original_video_placeholder.video(upload)
+                
+                with col_processed:
+                    st.write("**🤖 Processed Output**")
+                    processed_frame_placeholder = st.empty()
+                
+                progress_bar = st.progress(0)
+                status_text = st.empty()
 
-        try:
-            with st.spinner("AI is analyzing video... This may take a minute."):
                 pipeline = PosePipeline(tmp_path)
-                final_json = pipeline.run()
-            if final_json is None:
-                st.error("No persons detected; anomaly scoring skipped.")
-                return
-            
-            # --- Show Results after successful run ---
-            st.subheader("Results")
-            res_prefix = cfg["paths"]["static_prefix"]
-            expected_stem = get_expected_name(video_path.stem, res_prefix)
-            
-            out_dir = Path(cfg["paths"]["pose_output_dir"])
-            pose_vis_dir = out_dir / "pose_vis"
-            vis_file = pose_vis_dir / f"{expected_stem}_vis.avi"
+                final_json_path = None
+                
+                try:
+                    # Iterate through the unified pipeline generator
+                    for frame, frame_id, total in pipeline.run_live():
+                        # Convert BGR (OpenCV) to RGB (Streamlit)
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        processed_frame_placeholder.image(frame_rgb, channels="RGB", use_column_width=True)
+                        
+                        # Update progress
+                        progress = (frame_id + 1) / total if total > 0 else 0
+                        progress_bar.progress(min(progress, 1.0))
+                        status_text.text(f"Processing Frame: {frame_id + 1} / {total}")
+                    
+                    # After generator completes, get the JSON path
+                    res_prefix = run_cfg["paths"]["static_prefix"]
+                    expected_json_name = get_expected_name(video_path.stem, res_prefix) + run_cfg["paths"]["pose_json_suffix"]
+                    final_json_path = Path(run_cfg["paths"]["pose_output_dir"]) / expected_json_name
+                    
+                except Exception as e:
+                    st.error(f"❌ Error during processing: {str(e)}")
+                    import traceback
+                    st.error(f"Traceback: {traceback.format_exc()}")
 
-            tab_pose, tab_sparta = st.tabs(["🎥 Pose Output", "⚡ Anomaly Scores"])
+                # --- STEP 2: ANOMALY SCORING (SPARTA) ---
+                st.divider()
+                st.subheader("⚡ Anomaly Intelligence")
+                
+                if final_json_path and final_json_path.exists():
+                    sparta_cfg = build_sparta_config(BASE_CFG, sparta_branch, ckpt_c, ckpt_f, final_json_path.parent, device)
+                    
+                    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=BASE_DIR, delete=False) as tmp_sparta:
+                        yaml.safe_dump(sparta_cfg, tmp_sparta)
+                        tmp_sparta_path = tmp_sparta.name
 
-            with tab_pose:
-                if save_video:
-                    if vis_file.exists():
-                        st.success(f"Video generated: {vis_file.name}")
-                        with open(vis_file, "rb") as f:
-                            st.download_button("📥 Download Result Video", f, file_name=vis_file.name)
-                    else:
-                        st.warning(f"Video was requested but not found at {vis_file}")
-                st.info(f"Pose JSON saved to: {final_json}")
+                    with st.spinner("Calculating Anomaly Scores..."):
+                        subprocess.run(["python", "main.py", "--config", tmp_sparta_path], cwd=BASE_DIR, check=True)
 
-            with tab_sparta:
-                st.write("Runs anomaly scoring on the extracted pose JSON; no masks required.")
-                pose_json_dir = Path(final_json).parent
-                sparta_cfg = build_sparta_config(BASE_CFG, sparta_branch, ckpt_c, ckpt_f, pose_json_dir, device)
-                Path(sparta_cfg["save_results_dir"]).mkdir(parents=True, exist_ok=True)
-                with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=BASE_DIR, delete=False) as tmp_sparta:
-                    yaml.safe_dump(sparta_cfg, tmp_sparta)
-                    tmp_sparta_path = tmp_sparta.name
-                with st.spinner("Running anomaly scoring..."):
-                    subprocess.run(["python", "main.py", "--config", tmp_sparta_path], cwd=BASE_DIR, check=True)
-                scores_files = sorted(Path(sparta_cfg["save_results_dir"]).glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
-                if scores_files:
-                    latest = scores_files[0]
-                    df = pd.read_csv(latest)
-                    score_col = "score" if "score" in df.columns else df.columns[-1]
-                    st.line_chart(df[score_col], height=250)
-                    with open(latest, "rb") as f:
-                        st.download_button("📥 Download scores CSV", f, file_name=latest.name)
+                    # Show the Chart
+                    scores_dir = Path(sparta_cfg["save_results_dir"])
+                    scores_files = sorted(scores_dir.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+                    
+                    if scores_files:
+                        df = pd.read_csv(scores_files[0])
+                        score_col = "score" if "score" in df.columns else df.columns[-1]
+                        st.line_chart(df[score_col], height=300)
+                        st.success(f"✅ Anomaly scores saved to: {scores_files[0]}")
                 else:
-                    st.warning("No anomaly score file was produced.")
-
-        except Exception as e:
-            st.error(f"Pipeline Error: {e}")
-        finally:
-            if 'tmp_path' in locals():
-                Path(tmp_path).unlink(missing_ok=True)
-            if 'tmp_sparta_path' in locals():
-                Path(tmp_sparta_path).unlink(missing_ok=True)
+                    st.warning("⚠️ Pose JSON not found; skipping anomaly scoring.")
+                    
+            except Exception as e:
+                st.error(f"❌ Unexpected error: {str(e)}")
+                import traceback
+                st.error(f"Details: {traceback.format_exc()}")
+            finally:
+                if 'tmp_path' in locals(): 
+                    Path(tmp_path).unlink(missing_ok=True)
+                if 'tmp_sparta_path' in locals(): Path(tmp_sparta_path).unlink(missing_ok=True)
 
 if __name__ == "__main__":
     main()

@@ -402,6 +402,7 @@ class YoloPoseEstimator(PoseEstimatorBase):
         self.cfg = cfg
         self.model = YOLO(str(model_paths.weights))
         self.conf = float(cfg.pose_cfg.get("confidence_threshold", 0.25))
+        self.conf_threshold = self.conf  # Alias for interface consistency
         self.min_kpt_conf = float(cfg.pose_cfg.get("min_keypoint_confidence", 0.3))
         self.expected_kp = None  # determined on first valid frame
         rng = random.Random(os.urandom(16))
@@ -534,44 +535,183 @@ class YoloPoseEstimator(PoseEstimatorBase):
 
 # ---------- Pipeline ----------
 
-class PosePipeline:
-    """Thin wrapper so Streamlit UI can call a single entry-point."""
+# --- Update in pose_estimation.py ---
 
+class PosePipeline:
     def __init__(self, config_path: Optional[str] = None):
         self.config = Config(config_path)
         self.paths = self.config.resolved_paths()
-        # Ensure output dir exists
-        self.paths["pose_output_dir"].mkdir(parents=True, exist_ok=True)
-        self.paths["pose_video_dir"].mkdir(parents=True, exist_ok=True)
 
-    def run(self) -> Optional[Path]:
+    # Inside PosePipeline class in pose_estimation.py
+
+    def run_live(self):
+        """
+        Generator that yields processed frames with detection, tracking, and pose estimation
+        all happening in a single pass per frame.
+        """
         p = self.paths
-
-        # Step 1: detection + tracking
+        cap = cv2.VideoCapture(str(p["input_video"]))
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open video: {p['input_video']}")
+        
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        
+        # Initialize detector, tracker, and pose estimator once
         detector = PersonDetector(self.config)
-        dets = detector.run(p["input_video"])
-        if not dets:
-            return None
-
-        # Step 2: pose estimation
-        pose_name = self.config.pose_cfg.get("name", "").lower()
+        tracker = BYTETracker(detector.bt_args, frame_rate=fps)
+        
         pose_paths = self.config.pose_paths()
+        pose_name = self.config.pose_cfg.get("name", "").lower()
         if "yolo" in pose_name:
             estimator = YoloPoseEstimator(self.config, pose_paths)
+        elif "vit" in pose_name or "rtm" in pose_name:
+            estimator = MMPoseTopDownEstimator(self.config, pose_paths)
         else:
             estimator = MMPoseTopDownEstimator(self.config, pose_paths)
+        
+        frame_id = 0
+        sparta_json = defaultdict(dict)
+        
+        with tqdm(total=total_frames, desc="Processing") as pbar:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # --- STEP 1: Detection & Tracking (unified) ---
+                det_kwargs = {"conf": detector.conf, "iou": detector.iou, "verbose": False, "device": detector.device}
+                if detector.classes:
+                    det_kwargs["classes"] = detector.classes
+                
+                results_list = detector.model(frame, **det_kwargs)
+                if isinstance(results_list, list) and len(results_list) > 0:
+                    results = results_list[0]
+                else:
+                    results = results_list
+                
+                # Extract boxes
+                if hasattr(results, 'boxes') and results.boxes is not None:
+                    boxes = results.boxes.cpu()
+                else:
+                    boxes = Boxes(torch.zeros((0, 6)), frame.shape[:2])
+                
+                # Update tracker with detected boxes
+                tracks = tracker.update(boxes, frame)
+                
+                # --- STEP 2: Pose Estimation & Visualization (unified) ---
+                for t in tracks:
+                    if len(t) >= 5:
+                        x1, y1, x2, y2 = t[:4]
+                        track_id = int(t[4])
+                        
+                        # Extract bbox and run pose estimation
+                        bbox = [float(x1), float(y1), float(x2), float(y2)]
+                        
+                        if isinstance(estimator, YoloPoseEstimator):
+                            pose = self._estimate_yolo_pose(estimator, frame, bbox)
+                        else:
+                            pose = estimator._estimate(frame, bbox)
+                        
+                        if pose and pose.get("mean", 0) >= estimator.conf_threshold:
+                            # Store keypoints and draw on frame
+                            flat = [c for trip in pose["keypoints"] for c in trip]
+                            sparta_json[str(track_id)][str(frame_id)] = {
+                                "keypoints": flat,
+                                "scores": float(pose["mean"])
+                            }
+                            
+                            # Draw skeleton & keypoints
+                            frame = self._draw_pose_on_frame(frame, pose, estimator)
+                
+                # --- STEP 3: Yield processed frame to Streamlit ---
+                yield frame, frame_id, total_frames
+                frame_id += 1
+                pbar.update(1)
+        
+        cap.release()
+        
+        # Save the final JSON after all frames processed
+        p["pose_output_dir"].mkdir(parents=True, exist_ok=True)
         out_name = self.config.human_centric_filename(Path(p["input_video"]).stem)
-        pose_video_path = p["pose_video_dir"] / f"{Path(out_name).stem}_vis.avi"
-        final_json = estimator.process(
-            p["input_video"],
-            dets,
-            p["pose_output_dir"],
-            self.config.pose_json_suffix,
-            output_name=out_name,
-            output_video_path=pose_video_path if self.config.pose_save_video else None,
-        )
-        return final_json
+        final_path = p["pose_output_dir"] / out_name
+        with open(final_path, "w") as f:
+            json.dump(sparta_json, f, indent=2)
+        
+        return final_path
 
+    def _estimate_yolo_pose(self, estimator, frame, bbox):
+        """Extract pose from YOLO model within a bbox."""
+        x1, y1, x2, y2 = map(int, bbox)
+        frame_h, frame_w = frame.shape[:2]
+        
+        # Clamp bbox to frame
+        x1 = max(0, min(frame_w - 1, x1))
+        y1 = max(0, min(frame_h - 1, y1))
+        x2 = max(0, min(frame_w, x2))
+        y2 = max(0, min(frame_h, y2))
+        
+        if x2 <= x1 or y2 <= y1:
+            return None
+        
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return None
+        
+        # Run YOLO pose on ROI
+        results = estimator.model(roi, conf=estimator.conf, verbose=False)
+        if isinstance(results, list):
+            if not results:
+                return None
+            result = results[0]
+        else:
+            result = results
+        
+        kpt_obj = getattr(result, "keypoints", None)
+        if kpt_obj is None or not hasattr(kpt_obj, 'xy') or kpt_obj.xy is None or len(kpt_obj.xy) == 0:
+            return None
+        
+        # Get best pose (most confident)
+        best_i = 0
+        boxes = getattr(result, "boxes", None)
+        if boxes is not None and hasattr(boxes, "conf") and len(boxes.conf) > 0:
+            try:
+                best_i = int(boxes.conf.argmax().item())
+            except Exception:
+                best_i = 0
+        
+        kps = kpt_obj.xy[best_i].cpu().numpy()
+        confs = kpt_obj.conf[best_i].cpu().numpy()
+        
+        # Offset keypoints back to original frame coordinates
+        kps[:, 0] += x1
+        kps[:, 1] += y1
+        
+        triplets = [[float(x), float(y), float(c)] for (x, y), c in zip(kps, confs)]
+        return {"keypoints": triplets, "mean": float(confs.mean())}
+
+    def _draw_pose_on_frame(self, frame, pose, estimator):
+        """Draw skeleton connections and keypoints on frame."""
+        color = estimator._vis_color if hasattr(estimator, '_vis_color') else (0, 255, 0)
+        kpts = pose["keypoints"]
+        min_kpt_conf = estimator.min_kpt_conf if hasattr(estimator, 'min_kpt_conf') else 0.3
+        line_thickness = estimator._vis_line_thickness if hasattr(estimator, '_vis_line_thickness') else 2
+        kpt_radius = estimator._vis_kpt_radius if hasattr(estimator, '_vis_kpt_radius') else 3
+        
+        # Draw skeleton lines
+        for start_idx, end_idx in SKELETON_CONNECTIONS:
+            if start_idx < len(kpts) and end_idx < len(kpts):
+                x1, y1, s1 = kpts[start_idx]
+                x2, y2, s2 = kpts[end_idx]
+                if s1 >= min_kpt_conf and s2 >= min_kpt_conf:
+                    cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, line_thickness, lineType=cv2.LINE_AA)
+        
+        # Draw keypoint dots
+        for (x, y, s) in kpts:
+            if s >= min_kpt_conf:
+                cv2.circle(frame, (int(x), int(y)), kpt_radius, color, -1, lineType=cv2.LINE_AA)
+        
+        return frame
 
 # ---------- Main ----------
 
