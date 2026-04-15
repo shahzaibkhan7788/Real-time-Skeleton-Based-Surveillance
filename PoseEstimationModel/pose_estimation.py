@@ -621,8 +621,14 @@ class PosePipeline:
                                 "scores": float(pose["mean"])
                             }
                             
-                            # Draw skeleton & keypoints
-                            frame = self._draw_pose_on_frame(frame, pose, estimator)
+                            # Draw skeleton, pose, bounding box, and track ID
+                            frame = self._draw_pose_on_frame(
+                                frame,
+                                pose,
+                                estimator,
+                                bbox=bbox,
+                                track_id=track_id,
+                            )
                 
                 # --- STEP 3: Yield processed frame to Streamlit ---
                 yield frame, frame_id, total_frames
@@ -690,12 +696,12 @@ class PosePipeline:
         triplets = [[float(x), float(y), float(c)] for (x, y), c in zip(kps, confs)]
         return {"keypoints": triplets, "mean": float(confs.mean())}
 
-    def _draw_pose_on_frame(self, frame, pose, estimator):
-        """Draw skeleton connections and keypoints on frame."""
+    def _draw_pose_on_frame(self, frame, pose, estimator, bbox: Optional[list[float]] = None, track_id: Optional[int] = None):
+        """Draw skeleton, keypoints, bounding box, and ID on frame."""
         color = estimator._vis_color if hasattr(estimator, '_vis_color') else (0, 255, 0)
         kpts = pose["keypoints"]
         min_kpt_conf = estimator.min_kpt_conf if hasattr(estimator, 'min_kpt_conf') else 0.3
-        line_thickness = estimator._vis_line_thickness if hasattr(estimator, '_vis_line_thickness') else 2
+        line_thickness = max(1, estimator._vis_line_thickness if hasattr(estimator, '_vis_line_thickness') else 2)
         kpt_radius = estimator._vis_kpt_radius if hasattr(estimator, '_vis_kpt_radius') else 3
         
         # Draw skeleton lines
@@ -710,6 +716,15 @@ class PosePipeline:
         for (x, y, s) in kpts:
             if s >= min_kpt_conf:
                 cv2.circle(frame, (int(x), int(y)), kpt_radius, color, -1, lineType=cv2.LINE_AA)
+
+        if bbox is not None:
+            x1, y1, x2, y2 = [int(round(v)) for v in bbox]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, line_thickness, lineType=cv2.LINE_AA)
+            if track_id is not None:
+                label = f"ID:{track_id}"
+                text_pos = (x1, max(y1 - 6, 12))
+                cv2.putText(frame, label, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 2, lineType=cv2.LINE_AA)
+                cv2.putText(frame, label, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, lineType=cv2.LINE_AA)
         
         return frame
 
