@@ -6,6 +6,7 @@ import random
 import subprocess
 import pandas as pd
 import cv2
+import traceback
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Tuple
@@ -289,14 +290,11 @@ def main():
         """,
         unsafe_allow_html=True,
     )
-    st.title("Human Surveillance Application")
-    st.caption("Upload a video → Detection stage will execute --> key points extraction stage execute → anomaly scoring model will execute")
     
-    col_left, col_right = st.columns(2)
-
-    with col_left:
-        st.subheader("Pose Estimation Model Selection")
-        preset = st.radio("Select Profile", list(PRESETS.keys()), horizontal=True)
+    # --- SIDEBAR: Model Configuration ---
+    with st.sidebar:
+        st.title("⚙️ Configuration")
+        preset = st.radio("Select Profile", list(PRESETS.keys()), horizontal=False)
         preset_info = PRESETS.get(preset)
 
         if preset_info:
@@ -306,16 +304,17 @@ def main():
         else:
             pose_family = st.selectbox("Pose Model", list(POSE_VARIANTS.keys()))
             pose_variant = st.selectbox("Variant", POSE_VARIANTS.get(pose_family, ["large"]))
-            det_variant = st.selectbox("Detection (YOLO26)", DET_VARIANTS)
+            det_variant = st.selectbox("Detection (YOLO)", DET_VARIANTS)
 
         device = st.selectbox("Compute Device", ["cuda:0", "cpu", "auto"])
-        save_video = st.toggle("Generate Visualization Video", value=True)
+        save_video = st.toggle("Generate Visualization", value=True)
+        
         st.divider()
-        st.markdown("#### Spatio Temporal Pose Model selection setting")
-        sparta_branch_display = st.selectbox("Scoring Variant", ["Reconstruction Model", "Future trajecory prediction model", "Hybrid"])
+        st.subheader("Anomaly Scoring")
+        sparta_branch_display = st.selectbox("Variant", ["Reconstruction Model", "Future trajectory prediction model", "Hybrid"])
         sparta_branch_map = {
             "Reconstruction Model": "SPARTA_C",
-            "Future trajecory prediction model": "SPARTA_F",
+            "Future trajectory prediction model": "SPARTA_F",
             "Hybrid": "SPARTA_H",
         }
         sparta_branch = sparta_branch_map.get(sparta_branch_display, sparta_branch_display)
@@ -325,78 +324,76 @@ def main():
             ckpt_f = st.text_input("Checkpoint (F)", ckpt_defaults.get("sparta_h_f", ""))
         else:
             default_ckpt = ckpt_defaults.get("sparta_c" if sparta_branch == "SPARTA_C" else "sparta_f", "")
-            ckpt_c = st.text_input("Checkpoint path", default_ckpt)
+            ckpt_c = st.text_input("Checkpoint", default_ckpt)
             ckpt_f = ""
-
-    with col_right:
-        st.subheader("Video Upload")
-        upload = st.file_uploader("Upload video file", type=["mp4", "avi", "mov"])
-        video_path = None
-        if upload:
-            video_path = save_upload(upload)
-            st.success(f"File saved: {video_path.name}")
-            st.video(upload)
-
-    st.divider()
-    if st.button("🚀 Start Analysis", use_container_width=True, type="primary"):
-        if not video_path:
-            st.error("Please upload a video first!")
-        else:
+    
+    # --- MAIN: Title and Upload ---
+    st.title("🎥 Human-Centric Surveillance System")
+    st.caption("Real-time pose estimation with anomaly detection")
+    
+    # Upload Section
+    upload = st.file_uploader("📹 Upload Video", type=["mp4", "avi", "mov"], label_visibility="collapsed")
+    video_path = None
+    if upload:
+        video_path = save_upload(upload)
+    
+    if video_path:
+        # Start Analysis Button
+        if st.button("🚀 Start Live Analysis", use_container_width=True, type="primary"):
             # 1. Setup Config
             run_cfg = build_run_config(BASE_CFG, pose_family, pose_variant, det_variant, device, video_path, save_video)
             
-            # Using a temporary file to avoid config conflicts
             with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=POSE_DIR, delete=False) as tmp:
                 yaml.safe_dump(run_cfg, tmp)
                 tmp_path = tmp.name
 
             try:
-                # --- STEP 1: UNIFIED LIVE PROCESSING (Detection + Tracking + Pose) ---
-                st.markdown("### 🎥 Live Analysis Preview (Original vs Processed)")
+                st.divider()
                 
-                # Create two columns for side-by-side display
-                col_original, col_processed = st.columns(2)
+                # --- VIDEO DISPLAY AREA ---
+                col_original, col_processed = st.columns(2, gap="small")
                 
                 with col_original:
-                    st.write("**📹 Original Video**")
-                    original_video_placeholder = st.empty()
-                    original_video_placeholder.video(upload)
+                    st.markdown("#### Original video ")
+                    st.video(upload, start_time=0)
                 
                 with col_processed:
-                    st.write("**🤖 Processed Output**")
-                    processed_frame_placeholder = st.empty()
+                    st.markdown("####  Model processing...")
+                    frame_placeholder = st.empty()
                 
+                # --- PROGRESS AREA (Compact) ---
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-
+                
                 pipeline = PosePipeline(tmp_path)
                 final_json_path = None
                 
                 try:
-                    # Iterate through the unified pipeline generator
+                    frame_count = 0
                     for frame, frame_id, total in pipeline.run_live():
-                        # Convert BGR (OpenCV) to RGB (Streamlit)
+                        # Convert BGR to RGB
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        processed_frame_placeholder.image(frame_rgb, channels="RGB", use_column_width=True)
+                        frame_placeholder.image(frame_rgb, channels="RGB")
                         
-                        # Update progress
-                        progress = (frame_id + 1) / total if total > 0 else 0
-                        progress_bar.progress(min(progress, 1.0))
-                        status_text.text(f"Processing Frame: {frame_id + 1} / {total}")
+                        frame_count += 1
+                        if total > 0 and frame_count % 50 == 0:
+                            progress_bar.progress(min((frame_id + 1) / total, 1.0))
                     
-                    # After generator completes, get the JSON path
+                    progress_bar.progress(1.0)
+                    status_text.success(f"✅ Processing Complete: {frame_count} frames processed")
+                    
+                    # Get JSON path
                     res_prefix = run_cfg["paths"]["static_prefix"]
                     expected_json_name = get_expected_name(video_path.stem, res_prefix) + run_cfg["paths"]["pose_json_suffix"]
                     final_json_path = Path(run_cfg["paths"]["pose_output_dir"]) / expected_json_name
-                    
+                
                 except Exception as e:
-                    st.error(f"❌ Error during processing: {str(e)}")
-                    import traceback
-                    st.error(f"Traceback: {traceback.format_exc()}")
+                    st.error(f"❌ Processing Error: {str(e)}")
+                    progress_container.error(f"Details: {traceback.format_exc()}")
 
-                # --- STEP 2: ANOMALY SCORING (SPARTA) ---
+                # --- ANOMALY SCORING ---
                 st.divider()
-                st.subheader("⚡ Anomaly Intelligence")
+                st.subheader("⚡ Anomaly Scores")
                 
                 if final_json_path and final_json_path.exists():
                     sparta_cfg = build_sparta_config(BASE_CFG, sparta_branch, ckpt_c, ckpt_f, final_json_path.parent, device)
@@ -405,10 +402,9 @@ def main():
                         yaml.safe_dump(sparta_cfg, tmp_sparta)
                         tmp_sparta_path = tmp_sparta.name
 
-                    with st.spinner("Calculating Anomaly Scores..."):
+                    with st.spinner("Computing anomaly scores..."):
                         subprocess.run(["python", "main.py", "--config", tmp_sparta_path], cwd=BASE_DIR, check=True)
 
-                    # Show the Chart
                     scores_dir = Path(sparta_cfg["save_results_dir"])
                     scores_files = sorted(scores_dir.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
                     
@@ -416,7 +412,7 @@ def main():
                         df = pd.read_csv(scores_files[0])
                         score_col = "score" if "score" in df.columns else df.columns[-1]
                         st.line_chart(df[score_col], height=300)
-                        st.success(f"✅ Anomaly scores saved to: {scores_files[0]}")
+                        st.success(f"✅ Scores: {scores_files[0].name}")
                 else:
                     st.warning("⚠️ Pose JSON not found; skipping anomaly scoring.")
                     
